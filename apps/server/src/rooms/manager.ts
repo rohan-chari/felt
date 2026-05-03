@@ -1,5 +1,12 @@
-import type { PlayerId, RoomId, ServerMessage } from "@felt/shared";
-import { applyEvent, createRoom, type RoomState, toSnapshot } from "./room.js";
+import { randomUUID } from "node:crypto";
+import type { PlayerId, RoomDelta, RoomId, ServerMessage } from "@felt/shared";
+import {
+  applyEvent,
+  applyIntent,
+  createRoom,
+  type RoomState,
+  toSnapshot,
+} from "./room.js";
 
 export type SessionId = string;
 
@@ -20,7 +27,7 @@ type JoinArgs = {
   displayName: string;
 };
 
-type JoinError = { error: { code: string; message: string } };
+type IntentError = { error: { code: string; message: string } };
 
 const ROOM_ID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_ID_LENGTH = 6;
@@ -32,6 +39,14 @@ function generateRoomId(): RoomId {
     id += ROOM_ID_ALPHABET[idx];
   }
   return id;
+}
+
+function findSeatOf(state: RoomState, playerId: PlayerId): number {
+  for (let i = 0; i < state.seats.length; i++) {
+    const seat = state.seats[i];
+    if (seat?.kind === "taken" && seat.playerId === playerId) return i;
+  }
+  return -1;
 }
 
 export class RoomManager {
@@ -49,7 +64,29 @@ export class RoomManager {
     return this.rooms.has(roomId);
   }
 
-  handleJoin(args: JoinArgs): Effect[] | JoinError {
+  private sessionsInRoom(roomId: RoomId, except?: SessionId): SessionId[] {
+    const out: SessionId[] = [];
+    for (const [sid, info] of this.sessions) {
+      if (info.roomId !== roomId) continue;
+      if (sid === except) continue;
+      out.push(sid);
+    }
+    return out;
+  }
+
+  private playerHasOtherSessions(roomId: RoomId, playerId: PlayerId): boolean {
+    for (const info of this.sessions.values()) {
+      if (info.roomId === roomId && info.playerId === playerId) return true;
+    }
+    return false;
+  }
+
+  private broadcastDelta(roomId: RoomId, delta: RoomDelta, except?: SessionId): Effect[] {
+    const message: ServerMessage = { type: "room.delta", roomId, delta };
+    return this.sessionsInRoom(roomId, except).map((sessionId) => ({ sessionId, message }));
+  }
+
+  handleJoin(args: JoinArgs): Effect[] | IntentError {
     const room = this.rooms.get(args.roomId);
     if (!room) {
       return { error: { code: "room_not_found", message: `Room ${args.roomId} does not exist` } };
@@ -69,19 +106,13 @@ export class RoomManager {
     ];
 
     if (!wasPresent) {
-      for (const [sid] of this.sessions) {
-        if (sid === args.sessionId) continue;
-        const info = this.sessions.get(sid);
-        if (info?.roomId !== args.roomId) continue;
-        effects.push({
-          sessionId: sid,
-          message: {
-            type: "room.delta",
-            roomId: args.roomId,
-            delta: { kind: "playerJoined", player },
-          },
-        });
-      }
+      effects.push(
+        ...this.broadcastDelta(
+          args.roomId,
+          { kind: "playerJoined", player },
+          args.sessionId,
+        ),
+      );
     }
 
     return effects;
@@ -92,28 +123,86 @@ export class RoomManager {
     if (!info) return [];
     this.sessions.delete(sessionId);
 
-    const stillPresent = [...this.sessions.values()].some(
-      (s) => s.roomId === info.roomId && s.playerId === info.playerId,
-    );
-    if (stillPresent) return [];
+    if (this.playerHasOtherSessions(info.roomId, info.playerId)) return [];
 
     const room = this.rooms.get(info.roomId);
     if (!room) return [];
-    const updated = applyEvent(room, { kind: "playerLeft", playerId: info.playerId });
-    this.rooms.set(info.roomId, updated);
+
+    let next = room;
+    const deltas: RoomDelta[] = [];
+
+    const seatIndex = findSeatOf(next, info.playerId);
+    if (seatIndex !== -1) {
+      next = applyEvent(next, { kind: "seatLeft", seatIndex });
+      deltas.push({ kind: "seatLeft", seatIndex, playerId: info.playerId });
+    }
+
+    next = applyEvent(next, { kind: "playerLeft", playerId: info.playerId });
+    deltas.push({ kind: "playerLeft", playerId: info.playerId });
+
+    this.rooms.set(info.roomId, next);
 
     const effects: Effect[] = [];
-    for (const [sid, sInfo] of this.sessions) {
-      if (sInfo.roomId !== info.roomId) continue;
-      effects.push({
-        sessionId: sid,
-        message: {
-          type: "room.delta",
-          roomId: info.roomId,
-          delta: { kind: "playerLeft", playerId: info.playerId },
-        },
-      });
+    for (const delta of deltas) {
+      effects.push(...this.broadcastDelta(info.roomId, delta));
     }
     return effects;
+  }
+
+  private dispatchIntent(
+    sessionId: SessionId,
+    runIntent: (
+      state: RoomState,
+      info: SessionInfo,
+    ) => ReturnType<typeof applyIntent>,
+  ): Effect[] | IntentError {
+    const info = this.sessions.get(sessionId);
+    if (!info) return { error: { code: "no_session", message: "Session has not joined a room" } };
+    const room = this.rooms.get(info.roomId);
+    if (!room) return { error: { code: "room_not_found", message: "Room no longer exists" } };
+
+    const result = runIntent(room, info);
+    if (!result.ok) return { error: { code: result.code, message: result.message } };
+
+    this.rooms.set(info.roomId, result.state);
+    return this.broadcastDelta(info.roomId, result.delta);
+  }
+
+  handleSeatTake(
+    sessionId: SessionId,
+    args: { seatIndex: number; buyIn: number },
+  ): Effect[] | IntentError {
+    return this.dispatchIntent(sessionId, (state, info) =>
+      applyIntent(state, {
+        kind: "seatTake",
+        playerId: info.playerId,
+        seatIndex: args.seatIndex,
+        buyIn: args.buyIn,
+      }),
+    );
+  }
+
+  handleSeatLeave(sessionId: SessionId): Effect[] | IntentError {
+    return this.dispatchIntent(sessionId, (state, info) =>
+      applyIntent(state, { kind: "seatLeave", playerId: info.playerId }),
+    );
+  }
+
+  handleGameStart(sessionId: SessionId): Effect[] | IntentError {
+    return this.dispatchIntent(sessionId, (state, info) =>
+      applyIntent(state, { kind: "gameStart", playerId: info.playerId }),
+    );
+  }
+
+  handleChat(sessionId: SessionId, args: { text: string }): Effect[] | IntentError {
+    return this.dispatchIntent(sessionId, (state, info) =>
+      applyIntent(state, {
+        kind: "chatSend",
+        playerId: info.playerId,
+        text: args.text,
+        chatId: randomUUID(),
+        ts: Date.now(),
+      }),
+    );
   }
 }

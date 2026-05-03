@@ -42,6 +42,11 @@ function nextMessage(ws: WebSocket): Promise<ServerMessage> {
   });
 }
 
+async function joinRoom(ws: WebSocket, roomId: string, playerId: string, name: string) {
+  ws.send(JSON.stringify({ type: "room.join", roomId, playerId, displayName: name }));
+  await nextMessage(ws); // consume snapshot
+}
+
 describe("server (integration)", () => {
   let handle: ServerHandle;
 
@@ -74,7 +79,7 @@ describe("server (integration)", () => {
     expect(res.headers.get("access-control-allow-origin")).toBe("*");
   });
 
-  it("WS room.join returns a snapshot", async () => {
+  it("WS room.join returns a snapshot with host=joiner and 8 empty seats", async () => {
     const roomId = handle.manager.createRoom();
     const ws = await openSocket(handle.port);
     ws.send(
@@ -86,54 +91,31 @@ describe("server (integration)", () => {
       }),
     );
     const msg = await nextMessage(ws);
-    expect(msg).toEqual({
-      type: "room.snapshot",
-      snapshot: { roomId, players: [{ id: "p1", displayName: "Alice" }] },
-    });
-    ws.close();
-  });
-
-  it("second joiner sees the first; first sees a delta", async () => {
-    const roomId = handle.manager.createRoom();
-    const wsA = await openSocket(handle.port);
-    wsA.send(JSON.stringify({ type: "room.join", roomId, playerId: "pA", displayName: "Alice" }));
-    await nextMessage(wsA); // snapshot for A
-
-    const wsB = await openSocket(handle.port);
-    const aDeltaPromise = nextMessage(wsA);
-    wsB.send(JSON.stringify({ type: "room.join", roomId, playerId: "pB", displayName: "Bob" }));
-
-    const [snapB, deltaA] = await Promise.all([nextMessage(wsB), aDeltaPromise]);
-    expect(snapB).toMatchObject({
+    expect(msg).toMatchObject({
       type: "room.snapshot",
       snapshot: {
         roomId,
-        players: expect.arrayContaining([
-          { id: "pA", displayName: "Alice" },
-          { id: "pB", displayName: "Bob" },
-        ]),
+        hostId: "p1",
+        players: [{ id: "p1", displayName: "Alice" }],
+        gameStarted: false,
+        chat: [],
       },
     });
-    expect(deltaA).toEqual({
-      type: "room.delta",
-      roomId,
-      delta: { kind: "playerJoined", player: { id: "pB", displayName: "Bob" } },
-    });
-
-    wsA.close();
-    wsB.close();
+    if (msg.type === "room.snapshot") {
+      expect(msg.snapshot.seats).toHaveLength(8);
+    }
+    ws.close();
   });
 
   it("disconnect broadcasts playerLeft to remaining clients", async () => {
     const roomId = handle.manager.createRoom();
     const wsA = await openSocket(handle.port);
-    wsA.send(JSON.stringify({ type: "room.join", roomId, playerId: "pA", displayName: "Alice" }));
-    await nextMessage(wsA);
+    await joinRoom(wsA, roomId, "pA", "Alice");
 
     const wsB = await openSocket(handle.port);
     const aDelta1 = nextMessage(wsA);
-    wsB.send(JSON.stringify({ type: "room.join", roomId, playerId: "pB", displayName: "Bob" }));
-    await Promise.all([nextMessage(wsB), aDelta1]);
+    await joinRoom(wsB, roomId, "pB", "Bob");
+    await aDelta1;
 
     const aDelta2 = nextMessage(wsA);
     wsB.close();
@@ -143,8 +125,97 @@ describe("server (integration)", () => {
       roomId,
       delta: { kind: "playerLeft", playerId: "pB" },
     });
-
     wsA.close();
+  });
+
+  it("seat.take broadcasts seatTaken to all", async () => {
+    const roomId = handle.manager.createRoom();
+    const wsA = await openSocket(handle.port);
+    await joinRoom(wsA, roomId, "pA", "Alice");
+    const wsB = await openSocket(handle.port);
+    const aJoinDelta = nextMessage(wsA);
+    await joinRoom(wsB, roomId, "pB", "Bob");
+    await aJoinDelta;
+
+    const aDelta = nextMessage(wsA);
+    const bDelta = nextMessage(wsB);
+    wsA.send(JSON.stringify({ type: "seat.take", seatIndex: 2, buyIn: 200 }));
+    const [da, db] = await Promise.all([aDelta, bDelta]);
+    const expected = {
+      type: "room.delta",
+      roomId,
+      delta: { kind: "seatTaken", seatIndex: 2, playerId: "pA", stack: 200 },
+    };
+    expect(da).toEqual(expected);
+    expect(db).toEqual(expected);
+    wsA.close();
+    wsB.close();
+  });
+
+  it("seat.take with invalid buyIn returns an error to the actor", async () => {
+    const roomId = handle.manager.createRoom();
+    const ws = await openSocket(handle.port);
+    await joinRoom(ws, roomId, "p1", "Alice");
+    ws.send(JSON.stringify({ type: "seat.take", seatIndex: 0, buyIn: 5 }));
+    const msg = await nextMessage(ws);
+    expect(msg).toMatchObject({ type: "error", code: "bad_buyin" });
+    ws.close();
+  });
+
+  it("game.start by host with 2 seated broadcasts gameStarted to all", async () => {
+    const roomId = handle.manager.createRoom();
+    const wsA = await openSocket(handle.port);
+    await joinRoom(wsA, roomId, "pA", "Alice");
+    const wsB = await openSocket(handle.port);
+    const aJoinDelta = nextMessage(wsA);
+    await joinRoom(wsB, roomId, "pB", "Bob");
+    await aJoinDelta;
+
+    // Both sit
+    const aSeat = nextMessage(wsA);
+    const bSeat = nextMessage(wsB);
+    wsA.send(JSON.stringify({ type: "seat.take", seatIndex: 0, buyIn: 200 }));
+    await Promise.all([aSeat, bSeat]);
+    const aSeat2 = nextMessage(wsA);
+    const bSeat2 = nextMessage(wsB);
+    wsB.send(JSON.stringify({ type: "seat.take", seatIndex: 1, buyIn: 200 }));
+    await Promise.all([aSeat2, bSeat2]);
+
+    const aGame = nextMessage(wsA);
+    const bGame = nextMessage(wsB);
+    wsA.send(JSON.stringify({ type: "game.start" }));
+    const [ga, gb] = await Promise.all([aGame, bGame]);
+    expect(ga).toEqual({ type: "room.delta", roomId, delta: { kind: "gameStarted" } });
+    expect(gb).toEqual(ga);
+    wsA.close();
+    wsB.close();
+  });
+
+  it("chat.send broadcasts chat delta with server-generated id", async () => {
+    const roomId = handle.manager.createRoom();
+    const wsA = await openSocket(handle.port);
+    await joinRoom(wsA, roomId, "pA", "Alice");
+    const wsB = await openSocket(handle.port);
+    const aJoin = nextMessage(wsA);
+    await joinRoom(wsB, roomId, "pB", "Bob");
+    await aJoin;
+
+    const aChat = nextMessage(wsA);
+    const bChat = nextMessage(wsB);
+    wsA.send(JSON.stringify({ type: "chat.send", text: "gg" }));
+    const [ca, cb] = await Promise.all([aChat, bChat]);
+
+    expect(ca).toMatchObject({
+      type: "room.delta",
+      roomId,
+      delta: {
+        kind: "chat",
+        message: { playerId: "pA", displayName: "Alice", text: "gg" },
+      },
+    });
+    expect(cb).toEqual(ca);
+    wsA.close();
+    wsB.close();
   });
 
   it("joining unknown room returns an error", async () => {

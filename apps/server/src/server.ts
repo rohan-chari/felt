@@ -101,30 +101,61 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
         return;
       }
 
-      if (parsed.type === "room.join") {
-        if (
-          typeof parsed.roomId !== "string" ||
-          typeof parsed.playerId !== "string" ||
-          typeof parsed.displayName !== "string"
-        ) {
-          sendError(sessionId, "bad_message", "room.join missing fields");
-          return;
-        }
-        const result = manager.handleJoin({
-          sessionId,
-          roomId: parsed.roomId,
-          playerId: parsed.playerId,
-          displayName: parsed.displayName,
-        });
-        if ("error" in result) {
-          sendError(sessionId, result.error.code, result.error.message);
-          return;
-        }
-        dispatch(result);
-        return;
-      }
+      const handleResult = (result: Effect[] | { error: { code: string; message: string } }) => {
+        if ("error" in result) sendError(sessionId, result.error.code, result.error.message);
+        else dispatch(result);
+      };
 
-      sendError(sessionId, "unknown_message", `Unknown message type`);
+      switch (parsed.type) {
+        case "room.join": {
+          if (
+            typeof parsed.roomId !== "string" ||
+            typeof parsed.playerId !== "string" ||
+            typeof parsed.displayName !== "string"
+          ) {
+            sendError(sessionId, "bad_message", "room.join missing fields");
+            return;
+          }
+          handleResult(
+            manager.handleJoin({
+              sessionId,
+              roomId: parsed.roomId,
+              playerId: parsed.playerId,
+              displayName: parsed.displayName,
+            }),
+          );
+          return;
+        }
+        case "seat.take": {
+          if (typeof parsed.seatIndex !== "number" || typeof parsed.buyIn !== "number") {
+            sendError(sessionId, "bad_message", "seat.take missing fields");
+            return;
+          }
+          handleResult(
+            manager.handleSeatTake(sessionId, {
+              seatIndex: parsed.seatIndex,
+              buyIn: parsed.buyIn,
+            }),
+          );
+          return;
+        }
+        case "seat.leave":
+          handleResult(manager.handleSeatLeave(sessionId));
+          return;
+        case "game.start":
+          handleResult(manager.handleGameStart(sessionId));
+          return;
+        case "chat.send": {
+          if (typeof parsed.text !== "string") {
+            sendError(sessionId, "bad_message", "chat.send missing text");
+            return;
+          }
+          handleResult(manager.handleChat(sessionId, { text: parsed.text }));
+          return;
+        }
+        default:
+          sendError(sessionId, "unknown_message", "Unknown message type");
+      }
     },
     close: (ws) => {
       const { sessionId } = ws.getUserData();

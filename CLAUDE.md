@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-Phases 0–1 complete: pnpm workspace with `apps/server` (Node + tsx + uWebSockets.js), `apps/web` (Vite + React + react-router), `packages/shared` (wire types). Rooms can be created via `POST /rooms`, joined over WebSocket, and presence (snapshot/delta on join/leave) is broadcast. 33 tests passing (25 server + 8 web). Treat `ROADMAP.md` as the authoritative build plan; Phase 2 (seats + lobby) is next.
+Phases 0–2 complete: full lobby experience. Players can join rooms, sit at one of 8 seats with a buy-in, the host can start the game (which just flips a flag), and chat works. The pure room module exposes both `applyEvent` (unconditional state transitions) and `applyIntent` (validates client intents, returns `{ok, state, delta} | {error}`). The manager dispatches intents and translates deltas into per-session `Effect[]`. 74 tests passing (61 server + 13 web). Treat `ROADMAP.md` as the authoritative build plan; Phase 3 (poker engine in isolation) is next.
 
 ## Project
 
