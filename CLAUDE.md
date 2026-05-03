@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-Phases 0–2 complete: full lobby experience. Players can join rooms, sit at one of 8 seats with a buy-in, the host can start the game (which just flips a flag), and chat works. The pure room module exposes both `applyEvent` (unconditional state transitions) and `applyIntent` (validates client intents, returns `{ok, state, delta} | {error}`). The manager dispatches intents and translates deltas into per-session `Effect[]`. 74 tests passing (61 server + 13 web). Treat `ROADMAP.md` as the authoritative build plan; Phase 3 (poker engine in isolation) is next.
+Phases 0–3 complete. Lobby works (rooms, seats, host, chat). The poker engine is built and isolated in `packages/engine` — pure functions, deterministic from a string seed via mulberry32 + FNV-1a hash, hand evaluation via `pokersolver`, full betting state machine including side pots and uncalled-bet refunds. 162 tests across the monorepo (61 server + 13 web + 88 engine, including 4 fast-check property tests over hundreds of random hands and a step-by-step replay-determinism property). The engine is NOT yet wired into the server — that's Phase 4. Treat `ROADMAP.md` as the authoritative build plan.
 
 ## Project
 
@@ -12,7 +12,7 @@ Phases 0–2 complete: full lobby experience. Players can join rooms, sit at one
 
 - `apps/server` — Node.js + µWebSockets game server (authoritative for all game state)
 - `apps/web` — React + Vite client (pure renderer of server state)
-- `packages/engine` — pure poker engine, no I/O
+- `packages/engine` — pure poker engine; no I/O, no timers, no sockets. `startHand(opts)` and `applyAction(state, seatIdx, action)` return `{state, effects}`. Side-pot calc returns orphaned-pot contributions so the engine can refund uncalled chips (caught by a property test). Test it via the scenario DSL in `src/scenario.ts`.
 - `packages/shared` — types shared between client and server
 - Postgres for durability, Redis for cross-instance routing (Phase 13 only), Firebase Auth (Phase 12)
 
