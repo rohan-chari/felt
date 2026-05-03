@@ -11,6 +11,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@felt/engine": "workspace:*",
     "@felt/shared": "workspace:*",
     "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.51.0"
   },

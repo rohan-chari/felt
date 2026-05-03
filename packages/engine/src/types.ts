@@ -1,14 +1,7 @@
-import type { Card } from "./cards.js";
+import type { Action, Card, Street } from "@felt/shared";
 import type { Pot } from "./pots.js";
 
-export type Street = "preflop" | "flop" | "turn" | "river" | "showdown" | "complete";
-
-export type Action =
-  | { kind: "fold" }
-  | { kind: "check" }
-  | { kind: "call" }
-  | { kind: "bet"; amount: number }
-  | { kind: "raise"; to: number };
+export type { Action, Street } from "@felt/shared";
 
 export type SeatState = {
   idx: number;

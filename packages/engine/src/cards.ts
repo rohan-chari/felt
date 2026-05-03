@@ -1,23 +1,7 @@
-export const RANKS = [
-  "2",
-  "3",
-  "4",
-  "5",
-  "6",
-  "7",
-  "8",
-  "9",
-  "T",
-  "J",
-  "Q",
-  "K",
-  "A",
-] as const;
-export const SUITS = ["h", "d", "c", "s"] as const;
-
-export type Rank = (typeof RANKS)[number];
-export type Suit = (typeof SUITS)[number];
-export type Card = `${Rank}${Suit}`;
+import { RANKS, SUITS } from "@felt/shared";
+export { RANKS, SUITS } from "@felt/shared";
+export type { Card, Rank, Suit } from "@felt/shared";
+import type { Card } from "@felt/shared";
 
 const RANK_SET = new Set<string>(RANKS);
 const SUIT_SET = new Set<string>(SUITS);

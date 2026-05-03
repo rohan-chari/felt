@@ -12,6 +12,7 @@ const baseSnapshot = {
     gameStarted: false,
     chat: [],
     config: { maxSeats: 8, minBuyIn: 100, maxBuyIn: 500 },
+    hand: null,
   },
 };
 
@@ -110,14 +111,95 @@ describe("applyServerMessage", () => {
     expect(s1.hostId).toBe("p2");
   });
 
-  it("error message sets status=error and stores message", () => {
+  it("error before joined is fatal: sets status=error and stores a friendly message", () => {
     const next = applyServerMessage(initialRoomViewState, {
       type: "error",
       code: "room_not_found",
       message: "Room ABC123 does not exist",
     });
     expect(next.status).toBe("error");
-    expect(next.error).toBe("Room ABC123 does not exist");
+    expect(next.error).toMatch(/Room not found/i);
+    expect(next.transientError).toBeNull();
+  });
+
+  it("error after joined is transient: sets transientError, leaves status=joined", () => {
+    const s0 = applyServerMessage(initialRoomViewState, baseSnapshot);
+    expect(s0.status).toBe("joined");
+    const s1 = applyServerMessage(s0, {
+      type: "error",
+      code: "seat_taken",
+      message: "Seat 3 is taken",
+    });
+    expect(s1.status).toBe("joined");
+    expect(s1.transientError).not.toBeNull();
+    expect(s1.transientError?.code).toBe("seat_taken");
+    expect(s1.transientError?.message).toMatch(/just taken/i);
+    expect(s1.transientError?.seq).toBe(1);
+  });
+
+  it("transient errors increment seq so the toast re-fires on repeats", () => {
+    const s0 = applyServerMessage(initialRoomViewState, baseSnapshot);
+    const s1 = applyServerMessage(s0, {
+      type: "error",
+      code: "seat_taken",
+      message: "x",
+    });
+    const s2 = applyServerMessage(s1, {
+      type: "error",
+      code: "seat_taken",
+      message: "x",
+    });
+    expect(s1.transientError?.seq).toBe(1);
+    expect(s2.transientError?.seq).toBe(2);
+  });
+
+  it("hand.snapshot delta replaces hand", () => {
+    const s0 = applyServerMessage(initialRoomViewState, baseSnapshot);
+    const handView = {
+      handId: "h1",
+      street: "preflop" as const,
+      board: [],
+      seats: [
+        {
+          playerId: "p1",
+          stack: 198,
+          committedThisRound: 2,
+          totalCommitted: 2,
+          isFolded: false,
+          isAllIn: false,
+          holeCards: null,
+        },
+      ],
+      currentPlayerId: "p1",
+      toMatch: 2,
+      lastRaiseSize: 2,
+      result: null,
+    };
+    const s1 = applyServerMessage(s0, {
+      type: "room.delta",
+      roomId: "R1",
+      delta: { kind: "hand.snapshot", hand: handView },
+    });
+    expect(s1.hand).toEqual(handView);
+  });
+
+  it("hand.holeCards stores private cards keyed by handId", () => {
+    const s1 = applyServerMessage(initialRoomViewState, {
+      type: "hand.holeCards",
+      handId: "h1",
+      cards: ["Ah", "Kd"],
+    });
+    expect(s1.myHoleCards).toEqual({ handId: "h1", cards: ["Ah", "Kd"] });
+  });
+
+  it("room.snapshot preserves myHoleCards across reconnect", () => {
+    const withCards = applyServerMessage(initialRoomViewState, {
+      type: "hand.holeCards",
+      handId: "h1",
+      cards: ["As", "Kc"],
+    });
+    const after = applyServerMessage(withCards, baseSnapshot);
+    expect(after.myHoleCards).toEqual({ handId: "h1", cards: ["As", "Kc"] });
   });
 
   it("does not mutate the input state", () => {

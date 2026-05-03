@@ -153,6 +153,14 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
           handleResult(manager.handleChat(sessionId, { text: parsed.text }));
           return;
         }
+        case "hand.action": {
+          if (!parsed.action || typeof parsed.action.kind !== "string") {
+            sendError(sessionId, "bad_message", "hand.action missing action");
+            return;
+          }
+          handleResult(manager.handleHandAction(sessionId, parsed.action));
+          return;
+        }
         default:
           sendError(sessionId, "unknown_message", "Unknown message type");
       }

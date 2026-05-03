@@ -3,16 +3,21 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import { wsUrl } from "../api";
 import { applyServerMessage, initialRoomViewState, type RoomViewState } from "./state";
 
-type Action = { kind: "message"; msg: ServerMessage } | { kind: "reset" };
+type Action =
+  | { kind: "message"; msg: ServerMessage }
+  | { kind: "reset" }
+  | { kind: "clearTransientError" };
 
 function reducer(state: RoomViewState, action: Action): RoomViewState {
   if (action.kind === "reset") return initialRoomViewState;
+  if (action.kind === "clearTransientError") return { ...state, transientError: null };
   return applyServerMessage(state, action.msg);
 }
 
 export type RoomConnection = {
   view: RoomViewState;
   send: (msg: ClientMessage) => void;
+  clearTransientError: () => void;
 };
 
 export function useRoomConnection(args: {
@@ -62,5 +67,9 @@ export function useRoomConnection(args: {
     ws.send(JSON.stringify(msg));
   }, []);
 
-  return { view, send };
+  const clearTransientError = useCallback(() => {
+    dispatch({ kind: "clearTransientError" });
+  }, []);
+
+  return { view, send, clearTransientError };
 }

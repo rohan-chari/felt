@@ -81,6 +81,49 @@ describe("RoomManager", () => {
       expect(msg.snapshot.config).toEqual({ maxSeats: 8, minBuyIn: 100, maxBuyIn: 500 });
     });
 
+    it("rejects a join when displayName collides with another player in the room", () => {
+      const roomId = mgr.createRoom();
+      mgr.handleJoin({ sessionId: "s1", roomId, playerId: "p1", displayName: "asd" });
+      const result = mgr.handleJoin({
+        sessionId: "s2",
+        roomId,
+        playerId: "p2",
+        displayName: "asd",
+      });
+      expect(result).toEqual({ error: { code: "name_taken", message: expect.any(String) } });
+    });
+
+    it("treats names case-insensitively and trim-equivalently for collision detection", () => {
+      const roomId = mgr.createRoom();
+      mgr.handleJoin({ sessionId: "s1", roomId, playerId: "p1", displayName: "Alice" });
+      const r1 = mgr.handleJoin({
+        sessionId: "s2",
+        roomId,
+        playerId: "p2",
+        displayName: "ALICE",
+      });
+      expect(r1).toEqual({ error: { code: "name_taken", message: expect.any(String) } });
+      const r2 = mgr.handleJoin({
+        sessionId: "s3",
+        roomId,
+        playerId: "p3",
+        displayName: " alice ",
+      });
+      expect(r2).toEqual({ error: { code: "name_taken", message: expect.any(String) } });
+    });
+
+    it("allows the same playerId to rejoin under the same name (multi-tab)", () => {
+      const roomId = mgr.createRoom();
+      mgr.handleJoin({ sessionId: "s1", roomId, playerId: "p1", displayName: "asd" });
+      const r = mgr.handleJoin({
+        sessionId: "s2",
+        roomId,
+        playerId: "p1",
+        displayName: "asd",
+      });
+      expect(Array.isArray(r)).toBe(true);
+    });
+
     it("second joiner triggers playerJoined delta to first", () => {
       const roomId = mgr.createRoom();
       mgr.handleJoin({ sessionId: "s1", roomId, playerId: "p1", displayName: "Alice" });
@@ -214,10 +257,14 @@ describe("RoomManager", () => {
       mgr.handleSeatTake("s1", { seatIndex: 0, buyIn: 200 });
       mgr.handleSeatTake("s2", { seatIndex: 1, buyIn: 200 });
       const out = mgr.handleGameStart("s1") as EffectArr;
-      expect(out.map((e) => e.sessionId).sort()).toEqual(["s1", "s2"]);
-      for (const e of out) {
-        expect(e.message).toEqual({ type: "room.delta", roomId, delta: { kind: "gameStarted" } });
-      }
+      // Each session should receive a gameStarted delta (engine snapshot + hole cards land too).
+      const gameStartedRecipients = out
+        .filter(
+          (e) => e.message.type === "room.delta" && e.message.delta.kind === "gameStarted",
+        )
+        .map((e) => e.sessionId)
+        .sort();
+      expect(gameStartedRecipients).toEqual(["s1", "s2"]);
     });
 
     it("non-host triggering game.start gets not_host", () => {
@@ -230,6 +277,114 @@ describe("RoomManager", () => {
       expect(isError(out)).toBe(true);
       if (!isError(out)) return;
       expect(out.error.code).toBe("not_host");
+    });
+  });
+
+  describe("handleGameStart with engine wired", () => {
+    function setupHandReady() {
+      const roomId = mgr.createRoom();
+      mgr.handleJoin({ sessionId: "s1", roomId, playerId: "p1", displayName: "Alice" });
+      mgr.handleJoin({ sessionId: "s2", roomId, playerId: "p2", displayName: "Bob" });
+      mgr.handleSeatTake("s1", { seatIndex: 0, buyIn: 200 });
+      mgr.handleSeatTake("s2", { seatIndex: 1, buyIn: 200 });
+      return roomId;
+    }
+
+    it("emits gameStarted, hand.snapshot to all, and hand.holeCards privately to each seat owner", () => {
+      const roomId = setupHandReady();
+      const out = mgr.handleGameStart("s1") as EffectArr;
+
+      const messagesBySession = new Map<string, ServerMessage[]>();
+      for (const e of out) {
+        const arr = messagesBySession.get(e.sessionId) ?? [];
+        arr.push(e.message);
+        messagesBySession.set(e.sessionId, arr);
+      }
+
+      // Both sessions should get gameStarted delta
+      for (const sid of ["s1", "s2"]) {
+        const msgs = messagesBySession.get(sid) ?? [];
+        const gameStarted = msgs.find(
+          (m) => m.type === "room.delta" && m.delta.kind === "gameStarted",
+        );
+        expect(gameStarted).toBeDefined();
+        const handSnapshot = msgs.find(
+          (m) => m.type === "room.delta" && m.delta.kind === "hand.snapshot",
+        );
+        expect(handSnapshot).toBeDefined();
+      }
+
+      // Each seat owner should get exactly one hand.holeCards
+      for (const sid of ["s1", "s2"]) {
+        const msgs = messagesBySession.get(sid) ?? [];
+        const holeCards = msgs.filter((m) => m.type === "hand.holeCards");
+        expect(holeCards).toHaveLength(1);
+      }
+    });
+
+    it("hand snapshot includes both seated players, currentPlayerId, board=[]", () => {
+      const roomId = setupHandReady();
+      const out = mgr.handleGameStart("s1") as EffectArr;
+      const snap = out
+        .map((e) => e.message)
+        .find(
+          (m): m is Extract<ServerMessage, { type: "room.delta" }> =>
+            m.type === "room.delta" && m.delta.kind === "hand.snapshot",
+        );
+      expect(snap).toBeDefined();
+      if (!snap || snap.delta.kind !== "hand.snapshot") return;
+      const view = snap.delta.hand;
+      expect(view.street).toBe("preflop");
+      expect(view.board).toEqual([]);
+      expect(view.seats).toHaveLength(2);
+      expect(view.currentPlayerId).toBe("p1"); // heads-up: dealer (SB) acts first
+    });
+  });
+
+  describe("handleHandAction", () => {
+    function setupActiveHand() {
+      const roomId = mgr.createRoom();
+      mgr.handleJoin({ sessionId: "s1", roomId, playerId: "p1", displayName: "Alice" });
+      mgr.handleJoin({ sessionId: "s2", roomId, playerId: "p2", displayName: "Bob" });
+      mgr.handleSeatTake("s1", { seatIndex: 0, buyIn: 200 });
+      mgr.handleSeatTake("s2", { seatIndex: 1, buyIn: 200 });
+      mgr.handleGameStart("s1");
+      return roomId;
+    }
+
+    it("rejects when no hand is active", () => {
+      const roomId = mgr.createRoom();
+      mgr.handleJoin({ sessionId: "s1", roomId, playerId: "p1", displayName: "Alice" });
+      const out = mgr.handleHandAction("s1", { kind: "fold" });
+      expect(isError(out)).toBe(true);
+      if (!isError(out)) return;
+      expect(out.error.code).toBe("no_hand");
+    });
+
+    it("rejects when not the current player's turn", () => {
+      setupActiveHand();
+      // Heads-up: p1 (SB, dealer) acts first preflop. p2 trying is wrong.
+      const out = mgr.handleHandAction("s2", { kind: "fold" });
+      expect(isError(out)).toBe(true);
+      if (!isError(out)) return;
+      expect(out.error.code).toBe("not_your_turn");
+    });
+
+    it("fold preflop ends the hand and broadcasts a final hand.snapshot with result", () => {
+      setupActiveHand();
+      const out = mgr.handleHandAction("s1", { kind: "fold" }) as EffectArr;
+      // Both clients get hand.action + hand.snapshot
+      for (const sid of ["s1", "s2"]) {
+        const msgs = out.filter((e) => e.sessionId === sid).map((e) => e.message);
+        const action = msgs.find((m) => m.type === "room.delta" && m.delta.kind === "hand.action");
+        const snap = msgs.find((m) => m.type === "room.delta" && m.delta.kind === "hand.snapshot");
+        expect(action).toBeDefined();
+        expect(snap).toBeDefined();
+        if (snap && snap.type === "room.delta" && snap.delta.kind === "hand.snapshot") {
+          expect(snap.delta.hand.street).toBe("complete");
+          expect(snap.delta.hand.result).not.toBeNull();
+        }
+      }
     });
   });
 

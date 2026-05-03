@@ -222,5 +222,6 @@ export function toSnapshot(state: RoomState): RoomSnapshot {
       minBuyIn: state.config.minBuyIn,
       maxBuyIn: state.config.maxBuyIn,
     },
+    hand: null, // Manager merges in active handView before sending.
   };
 }

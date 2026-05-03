@@ -33,4 +33,6 @@ export type RoomSnapshot = {
   gameStarted: boolean;
   chat: ChatMessage[];
   config: RoomConfig;
+  /** Public view of the current hand, if one is in progress (or the most recently completed). */
+  hand: import("./hand.js").HandView | null;
 };

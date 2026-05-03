@@ -1,5 +1,8 @@
-import { Hand } from "pokersolver";
+/// <reference path="./pokersolver.d.ts" />
+import pokersolver, { type Hand as PokersolverHand } from "pokersolver";
 import type { Card } from "./cards.js";
+
+const { Hand } = pokersolver;
 
 export type EvalResult = {
   rank: number;
@@ -32,7 +35,7 @@ export function winners(holeCards: Card[][], board: Card[]): number[] {
   const winningHands = Hand.winners(hands);
   const indices: number[] = [];
   for (let i = 0; i < hands.length; i++) {
-    if (winningHands.includes(hands[i] as Hand)) indices.push(i);
+    if (winningHands.includes(hands[i] as PokersolverHand)) indices.push(i);
   }
   return indices;
 }

@@ -158,7 +158,11 @@ function awardSinglePotToSole(state: HandState): HandResult {
   if (!sole) throw new Error("no alive seats to award");
   const totalPot = state.seats.reduce((sum, s) => sum + s.totalCommitted, 0);
   sole.stack += totalPot;
-  const pots: Pot[] = [{ amount: totalPot, eligibleSeats: [sole.idx] }];
+  const contributions = new Map<number, number>();
+  for (const s of state.seats) {
+    if (s.totalCommitted > 0) contributions.set(s.idx, s.totalCommitted);
+  }
+  const pots: Pot[] = [{ amount: totalPot, eligibleSeats: [sole.idx], contributions }];
   const awards: PotAward[] = [
     {
       amount: totalPot,

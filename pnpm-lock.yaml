@@ -20,6 +20,9 @@ importers:
 
   apps/server:
     dependencies:
+      '@felt/engine':
+        specifier: workspace:*
+        version: link:../../packages/engine
       '@felt/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -82,6 +85,9 @@ importers:
 
   packages/engine:
     dependencies:
+      '@felt/shared':
+        specifier: workspace:*
+        version: link:../shared
       pokersolver:
         specifier: ^2.1.4
         version: 2.1.4

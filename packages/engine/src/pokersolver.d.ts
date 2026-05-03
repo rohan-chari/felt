@@ -9,4 +9,6 @@ declare module "pokersolver" {
     static solve(cards: string[]): Hand;
     static winners(hands: Hand[]): Hand[];
   }
+  const _default: { Hand: typeof Hand };
+  export default _default;
 }

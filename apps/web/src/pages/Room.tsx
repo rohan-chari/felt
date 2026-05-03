@@ -2,25 +2,55 @@ import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { getOrCreatePlayerId } from "../identity";
 import { useRoomConnection } from "../rooms/useRoomConnection";
+import { ActionPanel } from "./ActionPanel";
 import { ChatPanel } from "./ChatPanel";
+import { HoleCardsHero } from "./HoleCardsHero";
 import "./Room.css";
+import { ShowdownBanner } from "./ShowdownBanner";
 import { Table } from "./Table";
+import { Toast } from "./Toast";
+
+function ShareLink({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard might not be available; ignore.
+    }
+  };
+  return (
+    <div className="share">
+      <span className="share-label">Share:</span>
+      <code className="share-url">{url}</code>
+      <button type="button" className="share-copy" onClick={onCopy}>
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
+  );
+}
 
 export function Room() {
   const { roomId = "" } = useParams<{ roomId: string }>();
   const [displayName, setDisplayName] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [pendingSeat, setPendingSeat] = useState<number | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
   const playerId = getOrCreatePlayerId();
 
-  const { view, send } = useRoomConnection({
+  const { view, send, clearTransientError } = useRoomConnection({
     roomId,
     playerId,
     displayName,
     enabled: submitted && displayName.trim().length > 0,
   });
 
-  if (!submitted) {
+  // If join failed (e.g., name_taken), bounce back to the prompt with the error.
+  const joinFailed = submitted && view.status === "error";
+
+  if (!submitted || joinFailed) {
     return (
       <div className="room-page">
         <h1>Room {roomId}</h1>
@@ -28,7 +58,10 @@ export function Room() {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (displayName.trim().length > 0) setSubmitted(true);
+            if (displayName.trim().length === 0) return;
+            // On retry after a failed join, ensure we treat this as a fresh attempt.
+            setSubmitted(false);
+            requestAnimationFrame(() => setSubmitted(true));
           }}
         >
           <input
@@ -41,6 +74,7 @@ export function Room() {
             Join
           </button>
         </form>
+        {joinFailed && view.error && <p className="error">{view.error}</p>}
       </div>
     );
   }
@@ -50,15 +84,6 @@ export function Room() {
       <div className="room-page">
         <h1>Room {roomId}</h1>
         <p>Connecting…</p>
-      </div>
-    );
-  }
-
-  if (view.status === "error") {
-    return (
-      <div className="room-page">
-        <h1>Room {roomId}</h1>
-        <p className="error">{view.error}</p>
       </div>
     );
   }
@@ -79,9 +104,7 @@ export function Room() {
     <div className="room-page">
       <header className="room-header">
         <h1>Room {roomId}</h1>
-        <div className="share">
-          Share: <code>{window.location.href}</code>
-        </div>
+        <ShareLink url={window.location.href} />
       </header>
 
       <div className="room-layout">
@@ -92,9 +115,22 @@ export function Room() {
             myPlayerId={playerId}
             hostId={view.hostId}
             gameStarted={view.gameStarted}
+            hand={view.hand}
+            myHoleCards={view.myHoleCards}
             onSitHere={onSitHere}
             onStandUp={onStandUp}
           />
+
+          {view.hand && view.hand.street !== "complete" && (
+            <ActionPanel
+              hand={view.hand}
+              myPlayerId={playerId}
+              players={view.players}
+              onAction={(action) => send({ type: "hand.action", action })}
+            />
+          )}
+
+          {view.hand && <ShowdownBanner hand={view.hand} players={view.players} />}
 
           <div className="controls">
             {isHost && !view.gameStarted && (
@@ -116,17 +152,39 @@ export function Room() {
             {!isHost && !view.gameStarted && (
               <span className="hint">Waiting for host to start the game.</span>
             )}
-            {view.gameStarted && <span className="hint">Game in progress.</span>}
+            {view.gameStarted && !view.hand && <span className="hint">Game in progress.</span>}
           </div>
         </main>
 
-        <aside>
-          <ChatPanel
-            messages={view.chat}
-            onSend={(text) => send({ type: "chat.send", text })}
-          />
-        </aside>
       </div>
+
+      <aside className={`chat-overlay ${chatOpen ? "open" : "closed"}`} aria-hidden={!chatOpen}>
+        <ChatPanel
+          messages={view.chat}
+          onSend={(text) => send({ type: "chat.send", text })}
+        />
+      </aside>
+
+      <button
+        type="button"
+        className={`chat-toggle ${chatOpen ? "open" : "closed"}`}
+        onClick={() => setChatOpen((v) => !v)}
+        aria-label={chatOpen ? "Hide chat" : "Show chat"}
+        title={chatOpen ? "Hide chat" : "Show chat"}
+      >
+        <span className="chat-toggle-arrow">{chatOpen ? "›" : "‹"}</span>
+        <span className="chat-toggle-label">Chat</span>
+      </button>
+
+      <HoleCardsHero cards={view.myHoleCards?.cards ?? null} />
+
+      {view.transientError && (
+        <Toast
+          triggerKey={view.transientError.seq}
+          message={view.transientError.message}
+          onClose={clearTransientError}
+        />
+      )}
 
       {pendingSeat !== null && view.config && (
         <BuyInModal

@@ -42,6 +42,37 @@ function nextMessage(ws: WebSocket): Promise<ServerMessage> {
   });
 }
 
+/** Buffered message reader — captures every message and lets you `take()` them in order. */
+function bufferMessages(ws: WebSocket): {
+  take: () => Promise<ServerMessage>;
+  takeN: (n: number) => Promise<ServerMessage[]>;
+} {
+  const queue: ServerMessage[] = [];
+  const waiters: Array<(m: ServerMessage) => void> = [];
+  ws.on("message", (data) => {
+    let msg: ServerMessage;
+    try {
+      msg = JSON.parse(data.toString("utf8")) as ServerMessage;
+    } catch {
+      return;
+    }
+    const w = waiters.shift();
+    if (w) w(msg);
+    else queue.push(msg);
+  });
+  const take = () => {
+    const buffered = queue.shift();
+    if (buffered) return Promise.resolve(buffered);
+    return new Promise<ServerMessage>((resolve) => waiters.push(resolve));
+  };
+  const takeN = async (n: number) => {
+    const out: ServerMessage[] = [];
+    for (let i = 0; i < n; i++) out.push(await take());
+    return out;
+  };
+  return { take, takeN };
+}
+
 async function joinRoom(ws: WebSocket, roomId: string, playerId: string, name: string) {
   ws.send(JSON.stringify({ type: "room.join", roomId, playerId, displayName: name }));
   await nextMessage(ws); // consume snapshot
@@ -226,5 +257,72 @@ describe("server (integration)", () => {
     const msg = await nextMessage(ws);
     expect(msg).toMatchObject({ type: "error", code: "room_not_found" });
     ws.close();
+  });
+
+  it("game.start delivers hole cards privately to each seat owner", async () => {
+    const roomId = handle.manager.createRoom();
+    const wsA = await openSocket(handle.port);
+    const aBuf = bufferMessages(wsA);
+    wsA.send(
+      JSON.stringify({ type: "room.join", roomId, playerId: "pA", displayName: "Alice" }),
+    );
+    await aBuf.take(); // pA snapshot
+    const wsB = await openSocket(handle.port);
+    const bBuf = bufferMessages(wsB);
+    wsB.send(JSON.stringify({ type: "room.join", roomId, playerId: "pB", displayName: "Bob" }));
+    await Promise.all([aBuf.take(), bBuf.take()]); // pA delta + pB snapshot
+
+    wsA.send(JSON.stringify({ type: "seat.take", seatIndex: 0, buyIn: 200 }));
+    await Promise.all([aBuf.take(), bBuf.take()]);
+    wsB.send(JSON.stringify({ type: "seat.take", seatIndex: 1, buyIn: 200 }));
+    await Promise.all([aBuf.take(), bBuf.take()]);
+
+    wsA.send(JSON.stringify({ type: "game.start" }));
+    const [a, b] = await Promise.all([aBuf.takeN(3), bBuf.takeN(3)]);
+
+    const aHole = a.filter((m) => m.type === "hand.holeCards");
+    const bHole = b.filter((m) => m.type === "hand.holeCards");
+    expect(aHole).toHaveLength(1);
+    expect(bHole).toHaveLength(1);
+    if (aHole[0]?.type === "hand.holeCards" && bHole[0]?.type === "hand.holeCards") {
+      expect(aHole[0].cards).not.toEqual(bHole[0].cards);
+      expect(aHole[0].cards).toHaveLength(2);
+    }
+    wsA.close();
+    wsB.close();
+  });
+
+  it("hand.action fold by SB ends the hand and broadcasts result", async () => {
+    const roomId = handle.manager.createRoom();
+    const wsA = await openSocket(handle.port);
+    const aBuf = bufferMessages(wsA);
+    wsA.send(JSON.stringify({ type: "room.join", roomId, playerId: "pA", displayName: "Alice" }));
+    await aBuf.take();
+    const wsB = await openSocket(handle.port);
+    const bBuf = bufferMessages(wsB);
+    wsB.send(JSON.stringify({ type: "room.join", roomId, playerId: "pB", displayName: "Bob" }));
+    await Promise.all([aBuf.take(), bBuf.take()]);
+    wsA.send(JSON.stringify({ type: "seat.take", seatIndex: 0, buyIn: 200 }));
+    await Promise.all([aBuf.take(), bBuf.take()]);
+    wsB.send(JSON.stringify({ type: "seat.take", seatIndex: 1, buyIn: 200 }));
+    await Promise.all([aBuf.take(), bBuf.take()]);
+    wsA.send(JSON.stringify({ type: "game.start" }));
+    await Promise.all([aBuf.takeN(3), bBuf.takeN(3)]);
+    // Heads-up: pA (dealer = SB) acts first preflop. Fold.
+    wsA.send(JSON.stringify({ type: "hand.action", action: { kind: "fold" } }));
+    const [aMsgs, bMsgs] = await Promise.all([aBuf.takeN(2), bBuf.takeN(2)]);
+    const aSnap = aMsgs.find((m) => m.type === "room.delta" && m.delta.kind === "hand.snapshot");
+    expect(aSnap).toBeDefined();
+    if (aSnap && aSnap.type === "room.delta" && aSnap.delta.kind === "hand.snapshot") {
+      expect(aSnap.delta.hand.street).toBe("complete");
+      expect(aSnap.delta.hand.result).not.toBeNull();
+    }
+    const bSnap = bMsgs.find((m) => m.type === "room.delta" && m.delta.kind === "hand.snapshot");
+    expect(bSnap).toBeDefined();
+    if (bSnap && bSnap.type === "room.delta" && bSnap.delta.kind === "hand.snapshot") {
+      expect(bSnap.delta.hand.result?.awards[0]?.winners[0]?.playerId).toBe("pB");
+    }
+    wsA.close();
+    wsB.close();
   });
 });

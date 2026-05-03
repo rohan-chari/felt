@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-Phases 0–3 complete. Lobby works (rooms, seats, host, chat). The poker engine is built and isolated in `packages/engine` — pure functions, deterministic from a string seed via mulberry32 + FNV-1a hash, hand evaluation via `pokersolver`, full betting state machine including side pots and uncalled-bet refunds. 162 tests across the monorepo (61 server + 13 web + 88 engine, including 4 fast-check property tests over hundreds of random hands and a step-by-step replay-determinism property). The engine is NOT yet wired into the server — that's Phase 4. Treat `ROADMAP.md` as the authoritative build plan.
+Phases 0–4 complete. Engine wired into the room: clicking "Start game" creates an engine HandState, deals hole cards privately to each seat owner, and broadcasts `hand.snapshot` deltas. Players act via `hand.action` messages routed through `engine.applyAction`. UI renders the felt with community cards, hole cards (mine face-up, others face-down, all face-up at showdown), an action panel for the active player, and a showdown banner with winner + hand description. After the hand ends the room sits idle until the next "Start game" — auto-deal lands in Phase 5. 172 tests (68 server + 16 web + 88 engine).
 
 ## Project
 
@@ -66,6 +66,17 @@ Per-workspace commands work via `pnpm --filter @felt/server <script>` (or `@felt
 ### µWebSockets.js gotcha
 
 `writeStatus(...)` MUST be called **before** any `writeHeader(...)`. Reverse order silently drops the status (defaults to 200). Easy to miss because there's no warning. See `apps/server/src/server.ts` OPTIONS handler for the correct ordering.
+
+### pokersolver ESM/CJS gotcha
+
+`pokersolver` is CommonJS. Vitest's interop accepts `import { Hand } from "pokersolver"` and tests pass, but **Node ESM at runtime crashes** with `does not provide an export named 'Hand'`. The working pattern (used in `packages/engine/src/evaluator.ts`):
+
+```ts
+import pokersolver, { type Hand as PokersolverHand } from "pokersolver";
+const { Hand } = pokersolver;
+```
+
+Plus a small `pokersolver.d.ts` next to it that exports both the class type AND a `default` containing it. Triple-slash reference path makes the `.d.ts` discoverable to consumers (server) without putting it in `@types`.
 
 ### Environment gotcha (Windows)
 

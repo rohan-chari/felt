@@ -14,6 +14,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@felt/shared": "workspace:*",
     "pokersolver": "^2.1.4"
   },
   "devDependencies": {

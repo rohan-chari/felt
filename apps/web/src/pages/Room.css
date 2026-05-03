@@ -37,25 +37,121 @@ body {
 .room-header .share {
   font-size: 13px;
   color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.room-header .share code {
+.share-label {
+  user-select: none;
+}
+
+.share-url {
   background: #fff;
   padding: 2px 6px;
   border-radius: 4px;
   border: 1px solid #ddd;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.share-copy {
+  padding: 2px 10px;
+  font-size: 12px;
+  border: 1px solid #ccc;
+  background: #f6f6f6;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.share-copy:hover {
+  background: #ececec;
 }
 
 .room-layout {
-  display: grid;
-  grid-template-columns: 1fr 320px;
-  gap: 24px;
+  display: block;
 }
 
-@media (max-width: 800px) {
-  .room-layout {
-    grid-template-columns: 1fr;
+/* Chat overlay (slides in from right, sits over the board) */
+.chat-overlay {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100vh;
+  width: 320px;
+  max-width: 90vw;
+  padding: 16px;
+  box-sizing: border-box;
+  background: rgba(243, 239, 231, 0.96);
+  border-left: 1px solid #ddd;
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.12);
+  transform: translateX(100%);
+  transition: transform 220ms ease;
+  z-index: 18;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-overlay.open {
+  transform: translateX(0);
+}
+
+.chat-overlay .chat-panel {
+  flex: 1;
+  height: auto;
+}
+
+/* Chat toggle button — vertical "Chat" label on the right edge */
+.chat-toggle {
+  position: fixed;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  width: 32px;
+  min-height: 96px;
+  border: 1px solid #ccc;
+  border-right: none;
+  background: #fff;
+  border-radius: 6px 0 0 6px;
+  cursor: pointer;
+  color: var(--muted);
+  box-shadow: -2px 0 6px rgba(0, 0, 0, 0.06);
+  z-index: 22;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 0;
+  transition: right 220ms ease, color 150ms ease;
+}
+
+.chat-toggle.open {
+  right: 320px;
+}
+
+@media (max-width: 600px) {
+  .chat-toggle.open {
+    right: 90vw;
   }
+}
+
+.chat-toggle:hover {
+  color: var(--accent);
+}
+
+.chat-toggle-arrow {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.chat-toggle-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 12px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  font-weight: 600;
 }
 
 .felt-table {
@@ -124,6 +220,7 @@ body {
   color: var(--text);
   padding: 6px;
   gap: 2px;
+  position: relative;
 }
 
 .seat-taken.mine {
@@ -246,6 +343,51 @@ body {
   margin-top: 8px;
 }
 
+/* Toast (transient error overlay) */
+.toast {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--crimson);
+  color: #fff;
+  padding: 10px 14px 10px 16px;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 30;
+  font-size: 14px;
+  max-width: 90vw;
+  animation: toast-in 180ms ease-out;
+}
+
+.toast-close {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.toast-close:hover {
+  color: #fff;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -10px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
 .buyin-overlay {
   position: fixed;
   inset: 0;
@@ -301,6 +443,273 @@ body {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
+}
+
+/* Cards (community + hole) */
+.board-row {
+  display: flex;
+  gap: 4px;
+  justify-content: center;
+}
+
+.card-face,
+.card-back {
+  width: 32px;
+  height: 44px;
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 14px;
+  background: #fff;
+  border: 1px solid #ddd;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.card-back {
+  background: repeating-linear-gradient(
+    45deg,
+    #1f3a6e,
+    #1f3a6e 4px,
+    #2a4a85 4px,
+    #2a4a85 8px
+  );
+  border-color: #1f3a6e;
+}
+
+.card-red {
+  color: var(--crimson);
+}
+
+.card-black {
+  color: #1a1a1a;
+}
+
+.card-rank {
+  line-height: 1;
+}
+
+.card-suit {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.seat-cards {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translate(-50%, 6px);
+  display: flex;
+  gap: 2px;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.seat-cards .card-face,
+.seat-cards .card-back {
+  width: 22px;
+  height: 30px;
+  font-size: 11px;
+}
+
+.seat-cards .card-suit {
+  font-size: 9px;
+}
+
+.seat.current {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.seat.folded {
+  opacity: 0.45;
+}
+
+.seat-bet {
+  font-size: 10px;
+  color: var(--crimson);
+  font-weight: 600;
+}
+
+/* Action panel */
+.action-panel {
+  margin-top: 12px;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.action-panel.waiting {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.action-buttons button {
+  padding: 8px 14px;
+  border: 1px solid #ccc;
+  background: #f6f6f6;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.action-buttons button:hover {
+  background: #ececec;
+}
+
+.action-raise {
+  display: flex;
+  gap: 8px;
+}
+
+.action-raise input {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.action-raise input.invalid {
+  border-color: var(--crimson);
+  outline: none;
+}
+
+.action-hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.action-hint .hint-error {
+  color: var(--crimson);
+  font-weight: 600;
+}
+
+.action-raise button {
+  padding: 6px 14px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.action-raise button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Big hero hole cards at the bottom of the screen — fanned, bottoms overlapping */
+.hole-hero {
+  position: fixed;
+  left: 50%;
+  /* Bottom halves of the cards are clipped by the viewport edge — pull below to overlap. */
+  bottom: -50px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: flex-end;
+  z-index: 15;
+  pointer-events: none;
+  /* Negative gap so the two cards overlap horizontally */
+}
+
+.hero-card {
+  width: 110px;
+  height: 156px;
+  background: #fff;
+  border: 2px solid #fff;
+  border-radius: 12px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding-top: 14px;
+  font-weight: 700;
+  transform-origin: 50% 100%;
+}
+
+.hero-card.hero-card-left {
+  transform: rotate(-9deg) translateX(20px);
+  z-index: 1;
+}
+
+.hero-card.hero-card-right {
+  transform: rotate(9deg) translateX(-20px);
+  z-index: 2;
+}
+
+.hero-card.hero-red {
+  color: var(--crimson);
+}
+
+.hero-card.hero-black {
+  color: #1a1a1a;
+}
+
+.hero-rank {
+  font-size: 44px;
+  line-height: 1;
+}
+
+.hero-suit {
+  font-size: 36px;
+  line-height: 1;
+}
+
+@media (max-width: 600px) {
+  .hole-hero {
+    bottom: -40px;
+  }
+  .hero-card {
+    width: 80px;
+    height: 112px;
+    padding-top: 10px;
+  }
+  .hero-card.hero-card-left {
+    transform: rotate(-9deg) translateX(14px);
+  }
+  .hero-card.hero-card-right {
+    transform: rotate(9deg) translateX(-14px);
+  }
+  .hero-rank {
+    font-size: 32px;
+  }
+  .hero-suit {
+    font-size: 26px;
+  }
+}
+
+/* Showdown banner */
+.showdown-banner {
+  margin-top: 12px;
+  padding: 12px 16px;
+  background: #fff5e6;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+
+.showdown-banner h3 {
+  margin: 0 0 6px;
+  color: var(--accent);
+}
+
+.showdown-banner ul {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 14px;
 }
 
 @media (max-width: 600px) {
