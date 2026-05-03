@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-Phase 0 complete: pnpm workspace scaffolded with `apps/server` (Node + tsx), `apps/web` (Vite + React), `packages/shared` (empty). `pnpm dev` boots both apps. Treat `ROADMAP.md` as the authoritative build plan; phases are gated and ordered intentionally — Phase 1 (rooms + presence) is next.
+Phases 0–1 complete: pnpm workspace with `apps/server` (Node + tsx + uWebSockets.js), `apps/web` (Vite + React + react-router), `packages/shared` (wire types). Rooms can be created via `POST /rooms`, joined over WebSocket, and presence (snapshot/delta on join/leave) is broadcast. 33 tests passing (25 server + 8 web). Treat `ROADMAP.md` as the authoritative build plan; Phase 2 (seats + lobby) is next.
 
 ## Project
 
@@ -52,9 +52,20 @@ From the repo root:
 - `pnpm build` — builds every workspace
 - `pnpm lint` — Biome check across the repo
 - `pnpm format` — Biome auto-format
-- `pnpm test` — not wired yet; lands with Phase 3
+- `pnpm test` — runs vitest in every workspace (`packages/shared` passes with no tests)
+- Per-workspace: `pnpm --filter @felt/server test`, etc.
 
 Per-workspace commands work via `pnpm --filter @felt/server <script>` (or `@felt/web`, `@felt/shared`).
+
+### Server runtime
+
+- Default port: `8080` (override with `PORT`)
+- CORS default: `*` (override with `CORS_ORIGIN`) — locked down at deploy in Phase 11
+- WebSocket route: `/ws`. Sessions get a UUID assigned in `upgrade`, stored on `ws.getUserData().sessionId`. The `RoomManager` maps sessionId → {roomId, playerId} and emits `Effect[]` lists that the transport translates into `ws.send` calls. Same effects pattern that the engine will use in Phase 3.
+
+### µWebSockets.js gotcha
+
+`writeStatus(...)` MUST be called **before** any `writeHeader(...)`. Reverse order silently drops the status (defaults to 200). Easy to miss because there's no warning. See `apps/server/src/server.ts` OPTIONS handler for the correct ordering.
 
 ### Environment gotcha (Windows)
 
