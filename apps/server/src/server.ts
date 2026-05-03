@@ -35,6 +35,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     }
   };
 
+  // Manager uses this for async-fired effects (e.g., the auto-advance timer).
+  manager.setDispatcher(dispatch);
+
   const sendError = (sessionId: SessionId, code: string, message: string): void => {
     dispatch([{ sessionId, message: { type: "error", code, message } }]);
   };
@@ -159,6 +162,14 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
             return;
           }
           handleResult(manager.handleHandAction(sessionId, parsed.action));
+          return;
+        }
+        case "seat.rebuy": {
+          if (typeof parsed.amount !== "number") {
+            sendError(sessionId, "bad_message", "seat.rebuy missing amount");
+            return;
+          }
+          handleResult(manager.handleSeatRebuy(sessionId, { amount: parsed.amount }));
           return;
         }
         default:

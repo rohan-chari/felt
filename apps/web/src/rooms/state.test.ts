@@ -13,6 +13,7 @@ const baseSnapshot = {
     chat: [],
     config: { maxSeats: 8, minBuyIn: 100, maxBuyIn: 500 },
     hand: null,
+    nextHandAt: null,
   },
 };
 
@@ -55,7 +56,13 @@ describe("applyServerMessage", () => {
       roomId: "R1",
       delta: { kind: "seatTaken", seatIndex: 3, playerId: "p1", stack: 200 },
     });
-    expect(s1.seats[3]).toEqual({ kind: "taken", index: 3, playerId: "p1", stack: 200 });
+    expect(s1.seats[3]).toEqual({
+      kind: "taken",
+      index: 3,
+      playerId: "p1",
+      stack: 200,
+      busted: false,
+    });
   });
 
   it("seatLeft empties the seat", () => {
@@ -64,7 +71,9 @@ describe("applyServerMessage", () => {
       snapshot: {
         ...baseSnapshot.snapshot,
         seats: baseSnapshot.snapshot.seats.map((s) =>
-          s.index === 2 ? { kind: "taken" as const, index: 2, playerId: "p1", stack: 200 } : s,
+          s.index === 2
+            ? { kind: "taken" as const, index: 2, playerId: "p1", stack: 200, busted: false }
+            : s,
         ),
       },
     };

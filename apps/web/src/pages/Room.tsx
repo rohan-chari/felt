@@ -5,6 +5,7 @@ import { useRoomConnection } from "../rooms/useRoomConnection";
 import { ActionPanel } from "./ActionPanel";
 import { ChatPanel } from "./ChatPanel";
 import { HoleCardsHero } from "./HoleCardsHero";
+import { NextHandCountdown } from "./NextHandCountdown";
 import "./Room.css";
 import { ShowdownBanner } from "./ShowdownBanner";
 import { Table } from "./Table";
@@ -37,6 +38,7 @@ export function Room() {
   const [displayName, setDisplayName] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [pendingSeat, setPendingSeat] = useState<number | null>(null);
+  const [rebuyOpen, setRebuyOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const playerId = getOrCreatePlayerId();
 
@@ -94,10 +96,15 @@ export function Room() {
 
   const onSitHere = (seatIndex: number) => setPendingSeat(seatIndex);
   const onStandUp = () => send({ type: "seat.leave" });
+  const onRebuy = () => setRebuyOpen(true);
   const confirmBuyIn = (buyIn: number) => {
     if (pendingSeat === null) return;
     send({ type: "seat.take", seatIndex: pendingSeat, buyIn });
     setPendingSeat(null);
+  };
+  const confirmRebuy = (amount: number) => {
+    send({ type: "seat.rebuy", amount });
+    setRebuyOpen(false);
   };
 
   return (
@@ -119,7 +126,12 @@ export function Room() {
             myHoleCards={view.myHoleCards}
             onSitHere={onSitHere}
             onStandUp={onStandUp}
+            onRebuy={onRebuy}
           />
+
+          {view.nextHandAt && view.nextHandAt > Date.now() && (
+            <NextHandCountdown at={view.nextHandAt} />
+          )}
 
           {view.hand && view.hand.street !== "complete" && (
             <ActionPanel
@@ -188,11 +200,21 @@ export function Room() {
 
       {pendingSeat !== null && view.config && (
         <BuyInModal
-          seatIndex={pendingSeat}
+          title={`Sit at seat ${pendingSeat + 1}`}
           minBuyIn={view.config.minBuyIn}
           maxBuyIn={view.config.maxBuyIn}
           onCancel={() => setPendingSeat(null)}
           onConfirm={confirmBuyIn}
+        />
+      )}
+
+      {rebuyOpen && view.config && (
+        <BuyInModal
+          title="Rebuy"
+          minBuyIn={view.config.minBuyIn}
+          maxBuyIn={view.config.maxBuyIn}
+          onCancel={() => setRebuyOpen(false)}
+          onConfirm={confirmRebuy}
         />
       )}
     </div>
@@ -200,7 +222,7 @@ export function Room() {
 }
 
 type BuyInModalProps = {
-  seatIndex: number;
+  title: string;
   minBuyIn: number;
   maxBuyIn: number;
   onCancel: () => void;
@@ -216,7 +238,7 @@ function BuyInModal(props: BuyInModalProps) {
   return (
     <div className="buyin-overlay" onMouseDown={(e) => e.target === e.currentTarget && props.onCancel()}>
       <div className="buyin-modal">
-        <h3>Sit at seat {props.seatIndex + 1}</h3>
+        <h3>{props.title}</h3>
         <label>
           Buy-in (between {props.minBuyIn} and {props.maxBuyIn})
           <input

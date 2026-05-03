@@ -9,7 +9,14 @@ export type Player = {
 
 export type Seat =
   | { kind: "empty"; index: number }
-  | { kind: "taken"; index: number; playerId: PlayerId; stack: number };
+  | {
+      kind: "taken";
+      index: number;
+      playerId: PlayerId;
+      stack: number;
+      /** True after the player loses their stack to 0; they need to rebuy to play again. */
+      busted: boolean;
+    };
 
 export type ChatMessage = {
   id: ChatMessageId;
@@ -35,4 +42,6 @@ export type RoomSnapshot = {
   config: RoomConfig;
   /** Public view of the current hand, if one is in progress (or the most recently completed). */
   hand: import("./hand.js").HandView | null;
+  /** Unix epoch ms when the next hand will auto-deal, if scheduled. */
+  nextHandAt: number | null;
 };

@@ -533,6 +533,24 @@ body {
   font-weight: 600;
 }
 
+.seat-busted {
+  font-size: 10px;
+  color: var(--crimson);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Inter-hand countdown */
+.next-hand-countdown {
+  margin-top: 12px;
+  text-align: center;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.5px;
+  font-size: 14px;
+}
+
 /* Action panel */
 .action-panel {
   margin-top: 12px;

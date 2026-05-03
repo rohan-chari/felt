@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyAction, startHand } from "./engine.js";
+import { applyAction, forceFold, startHand } from "./engine.js";
 import type { Effect } from "./types.js";
 
 function basicStart(seedSuffix = "1") {
@@ -169,6 +169,76 @@ describe("applyAction — basic", () => {
     expect(state.seats[2]?.stack).toBe(101);
     expect(state.seats[1]?.stack).toBe(99); // SB lost their 1 blind
     expect(state.seats[0]?.stack).toBe(100);
+  });
+
+  describe("forceFold (mid-hand disconnect)", () => {
+    it("folds the named seat even when it isn't their turn", () => {
+      const { state } = basicStart();
+      // 3-handed: UTG (seat 0) is current. Force-fold seat 2 (BB) instead.
+      const r = forceFold(state, 2);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.state.seats[2]?.isFolded).toBe(true);
+      // Turn unchanged — still UTG (seat 0).
+      expect(r.state.currentSeatIdx).toBe(0);
+    });
+
+    it("advances the turn when the folded seat WAS the current actor", () => {
+      const { state } = basicStart();
+      // Force-fold the current actor (seat 0).
+      const r = forceFold(state, 0);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.state.seats[0]?.isFolded).toBe(true);
+      // Next active seat is 1 (SB).
+      expect(r.state.currentSeatIdx).toBe(1);
+    });
+
+    it("ends the hand if forcing the fold leaves only one player", () => {
+      const { state: initial } = basicStart();
+      let s = initial;
+      // Fold seat 0 (UTG) and seat 1 (SB) → only seat 2 (BB) remains.
+      let r = forceFold(s, 0);
+      if (!r.ok) throw new Error("fail");
+      s = r.state;
+      r = forceFold(s, 1);
+      if (!r.ok) throw new Error("fail");
+      s = r.state;
+      expect(s.street).toBe("complete");
+      // BB wins blinds + UTG's 0 (UTG didn't pay).
+      // Stacks: SB=99 (lost 1), UTG=100, BB=101 (won 2 = 1 SB + 0 BB ... wait BB had 2 in)
+      // Pot = 1 (SB) + 2 (BB) = 3. BB wins all 3. BB ends with starting 100 - 2 BB + 3 = 101.
+      expect(s.seats[2]?.stack).toBe(101);
+    });
+
+    it("rejects folding a seat that's already folded or doesn't exist", () => {
+      const { state } = basicStart();
+      const r1 = forceFold(state, 99);
+      expect(r1.ok).toBe(false);
+      if (!r1.ok) expect(r1.code).toBe("bad_seat");
+
+      const r2 = forceFold(state, 0);
+      if (!r2.ok) throw new Error("fail");
+      const r3 = forceFold(r2.state, 0);
+      expect(r3.ok).toBe(false);
+      if (!r3.ok) expect(r3.code).toBe("already_folded");
+    });
+
+    it("rejects forceFold on a complete hand", () => {
+      const { state: initial } = basicStart();
+      let s = initial;
+      const r1 = forceFold(s, 0);
+      if (!r1.ok) throw new Error("fail");
+      s = r1.state;
+      const r2 = forceFold(s, 1);
+      if (!r2.ok) throw new Error("fail");
+      s = r2.state;
+      // Hand should be complete now
+      expect(s.street).toBe("complete");
+      const r3 = forceFold(s, 2);
+      expect(r3.ok).toBe(false);
+      if (!r3.ok) expect(r3.code).toBe("hand_over");
+    });
   });
 
   it("call → call → check (BB option used) advances to flop", () => {

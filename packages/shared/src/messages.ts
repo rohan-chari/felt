@@ -13,7 +13,8 @@ export type ClientMessage =
   | { type: "seat.leave" }
   | { type: "game.start" }
   | { type: "chat.send"; text: string }
-  | { type: "hand.action"; action: Action };
+  | { type: "hand.action"; action: Action }
+  | { type: "seat.rebuy"; amount: number };
 
 export type RoomDelta =
   | { kind: "playerJoined"; player: Player }
@@ -24,7 +25,9 @@ export type RoomDelta =
   | { kind: "gameStarted" }
   | { kind: "chat"; message: ChatMessage }
   | { kind: "hand.snapshot"; hand: HandView }
-  | { kind: "hand.action"; playerId: PlayerId; action: Action; chipsCommitted: number; isAllIn: boolean };
+  | { kind: "hand.action"; playerId: PlayerId; action: Action; chipsCommitted: number; isAllIn: boolean }
+  | { kind: "nextHandScheduled"; at: number | null }
+  | { kind: "seatStackUpdated"; seatIndex: number; playerId: PlayerId; stack: number; busted: boolean };
 
 export type ServerMessage =
   | { type: "room.snapshot"; snapshot: RoomSnapshot }

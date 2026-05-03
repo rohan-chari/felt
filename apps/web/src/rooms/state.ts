@@ -20,6 +20,7 @@ export type RoomViewState = {
   chat: ChatMessage[];
   config: RoomConfig | null;
   hand: HandView | null;
+  nextHandAt: number | null;
   myHoleCards: { handId: string; cards: [Card, Card] } | null;
   /** Fatal error during initial join — replaces the room view. */
   error: string | null;
@@ -37,6 +38,7 @@ export const initialRoomViewState: RoomViewState = {
   chat: [],
   config: null,
   hand: null,
+  nextHandAt: null,
   myHoleCards: null,
   error: null,
   transientError: null,
@@ -90,6 +92,7 @@ export function applyServerMessage(state: RoomViewState, msg: ServerMessage): Ro
         chat: msg.snapshot.chat.slice(),
         config: msg.snapshot.config,
         hand: msg.snapshot.hand,
+        nextHandAt: msg.snapshot.nextHandAt,
         myHoleCards: state.myHoleCards, // preserve across snapshots
         error: null,
         transientError: state.transientError,
@@ -112,12 +115,25 @@ export function applyServerMessage(state: RoomViewState, msg: ServerMessage): Ro
             index: delta.seatIndex,
             playerId: delta.playerId,
             stack: delta.stack,
+            busted: false,
           };
           return { ...state, seats: next };
         }
         case "seatLeft": {
           const next = state.seats.slice();
           next[delta.seatIndex] = { kind: "empty", index: delta.seatIndex };
+          return { ...state, seats: next };
+        }
+        case "seatStackUpdated": {
+          const next = state.seats.slice();
+          const existing = next[delta.seatIndex];
+          if (existing?.kind === "taken") {
+            next[delta.seatIndex] = {
+              ...existing,
+              stack: delta.stack,
+              busted: delta.busted,
+            };
+          }
           return { ...state, seats: next };
         }
         case "gameStarted":
@@ -129,6 +145,8 @@ export function applyServerMessage(state: RoomViewState, msg: ServerMessage): Ro
         case "hand.action":
           // Informational; the snapshot delta carries the new state.
           return state;
+        case "nextHandScheduled":
+          return { ...state, nextHandAt: delta.at };
       }
       return state;
     }

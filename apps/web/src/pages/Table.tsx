@@ -10,6 +10,7 @@ type TableProps = {
   myHoleCards: { handId: string; cards: [Card, Card] } | null;
   onSitHere: (seatIndex: number) => void;
   onStandUp: () => void;
+  onRebuy: () => void;
 };
 
 function nameFor(playerId: string, players: Player[]): string {
@@ -61,6 +62,7 @@ export function Table(props: TableProps) {
     myHoleCards,
     onSitHere,
     onStandUp,
+    onRebuy,
   } = props;
   const mySeatIndex = seats.findIndex((s) => s.kind === "taken" && s.playerId === myPlayerId);
   const N = seats.length;
@@ -161,8 +163,14 @@ export function Table(props: TableProps) {
                 {seat.playerId === hostId && <span className="host-badge"> ★</span>}
               </div>
               <div className="seat-stack">${liveStack}</div>
+              {seat.busted && <div className="seat-busted">Busted</div>}
               {isInHand && committed > 0 && <div className="seat-bet">+${committed}</div>}
-              {seat.playerId === myPlayerId && !gameStarted && (
+              {seat.playerId === myPlayerId && seat.busted && (
+                <button type="button" className="stand-btn" onClick={onRebuy}>
+                  Rebuy
+                </button>
+              )}
+              {seat.playerId === myPlayerId && !seat.busted && !gameStarted && (
                 <button type="button" className="stand-btn" onClick={onStandUp}>
                   Cash out
                 </button>

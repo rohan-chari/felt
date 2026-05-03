@@ -75,7 +75,7 @@ describe("room (pure)", () => {
       let r = createRoom("R1");
       r = applyEvent(r, { kind: "playerJoined", player: { id: "p1", displayName: "Alice" } });
       r = applyEvent(r, { kind: "seatTaken", seatIndex: 3, playerId: "p1", stack: 200 });
-      expect(r.seats[3]).toEqual({ kind: "taken", index: 3, playerId: "p1", stack: 200 });
+      expect(r.seats[3]).toEqual({ kind: "taken", index: 3, playerId: "p1", stack: 200, busted: false });
     });
 
     it("seatLeft empties the seat", () => {
@@ -112,7 +112,7 @@ describe("room (pure)", () => {
       expect(snap.hostId).toBe("p1");
       expect(snap.players).toEqual([{ id: "p1", displayName: "Alice" }]);
       expect(snap.seats).toHaveLength(8);
-      expect(snap.seats[2]).toMatchObject({ kind: "taken", playerId: "p1", stack: 200 });
+      expect(snap.seats[2]).toMatchObject({ kind: "taken", playerId: "p1", stack: 200, busted: false });
       expect(snap.gameStarted).toBe(false);
       expect(snap.chat).toEqual([]);
       expect(snap.config).toEqual({ maxSeats: 8, minBuyIn: 100, maxBuyIn: 500 });
@@ -142,6 +142,7 @@ describe("room (pure)", () => {
         index: 0,
         playerId: "p1",
         stack: 200,
+        busted: false,
       });
       expect(result.delta).toEqual({
         kind: "seatTaken",

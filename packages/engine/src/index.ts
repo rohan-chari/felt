@@ -1,4 +1,4 @@
-export { applyAction, startHand } from "./engine.js";
+export { applyAction, forceFold, startHand } from "./engine.js";
 export type { ApplyResult, ApplyOk, ApplyErr } from "./types.js";
 export type {
   Effect,

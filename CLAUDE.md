@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-Phases 0–4 complete. Engine wired into the room: clicking "Start game" creates an engine HandState, deals hole cards privately to each seat owner, and broadcasts `hand.snapshot` deltas. Players act via `hand.action` messages routed through `engine.applyAction`. UI renders the felt with community cards, hole cards (mine face-up, others face-down, all face-up at showdown), an action panel for the active player, and a showdown banner with winner + hand description. After the hand ends the room sits idle until the next "Start game" — auto-deal lands in Phase 5. 172 tests (68 server + 16 web + 88 engine).
+Phases 0–5 complete. Hands keep coming automatically: after each hand ends, the manager schedules the next one ~4s later via `setTimeout`, dealer rotates to the next non-busted seated slot, blinds rotate accordingly. Players who lose their stack are marked `busted` on `Seat`; they see a "Rebuy" button and submit `seat.rebuy { amount }` to come back. Mid-hand disconnects use `engine.forceFold` to fold the disconnected seat regardless of whose turn it is. Manager dispatches async effects (timer-fired hand starts) via `setDispatcher` callback wired into the server transport. 189 tests (77 server + 19 web + 93 engine).
 
 ## Project
 

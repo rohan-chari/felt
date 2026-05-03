@@ -20,6 +20,10 @@ export type RoomState = {
   seats: Seat[];
   gameStarted: boolean;
   chat: ChatMessage[];
+  /** Slot index of the dealer for the NEXT hand. Server rotates after each hand. */
+  nextDealerSlot: number;
+  /** Unix epoch ms when the next hand will auto-deal, if scheduled. */
+  nextHandAt: number | null;
 };
 
 const DEFAULT_CONFIG: InternalRoomConfig = {
@@ -34,8 +38,11 @@ export type RoomEvent =
   | { kind: "playerLeft"; playerId: PlayerId }
   | { kind: "seatTaken"; seatIndex: number; playerId: PlayerId; stack: number }
   | { kind: "seatLeft"; seatIndex: number }
+  | { kind: "seatStackUpdated"; seatIndex: number; stack: number; busted: boolean }
   | { kind: "gameStarted" }
-  | { kind: "chatMessage"; message: ChatMessage };
+  | { kind: "chatMessage"; message: ChatMessage }
+  | { kind: "nextHandScheduled"; at: number | null }
+  | { kind: "nextDealerSlotSet"; slot: number };
 
 export type RoomIntent =
   | { kind: "seatTake"; playerId: PlayerId; seatIndex: number; buyIn: number }
@@ -67,6 +74,8 @@ export function createRoom(roomId: RoomId, config?: Partial<InternalRoomConfig>)
     seats,
     gameStarted: false,
     chat: [],
+    nextDealerSlot: 0,
+    nextHandAt: null,
   };
 }
 
@@ -79,6 +88,8 @@ function cloneState(state: RoomState): RoomState {
     seats: state.seats.slice(),
     gameStarted: state.gameStarted,
     chat: state.chat.slice(),
+    nextDealerSlot: state.nextDealerSlot,
+    nextHandAt: state.nextHandAt,
   };
 }
 
@@ -98,11 +109,23 @@ export function applyEvent(state: RoomState, event: RoomEvent): RoomState {
         index: event.seatIndex,
         playerId: event.playerId,
         stack: event.stack,
+        busted: false,
       };
       return next;
     case "seatLeft":
       next.seats[event.seatIndex] = { kind: "empty", index: event.seatIndex };
       return next;
+    case "seatStackUpdated": {
+      const seat = next.seats[event.seatIndex];
+      if (seat?.kind === "taken") {
+        next.seats[event.seatIndex] = {
+          ...seat,
+          stack: event.stack,
+          busted: event.busted,
+        };
+      }
+      return next;
+    }
     case "gameStarted":
       next.gameStarted = true;
       return next;
@@ -112,6 +135,12 @@ export function applyEvent(state: RoomState, event: RoomEvent): RoomState {
       if (overflow > 0) next.chat = next.chat.slice(overflow);
       return next;
     }
+    case "nextHandScheduled":
+      next.nextHandAt = event.at;
+      return next;
+    case "nextDealerSlotSet":
+      next.nextDealerSlot = event.slot;
+      return next;
   }
 }
 
@@ -223,5 +252,6 @@ export function toSnapshot(state: RoomState): RoomSnapshot {
       maxBuyIn: state.config.maxBuyIn,
     },
     hand: null, // Manager merges in active handView before sending.
+    nextHandAt: state.nextHandAt,
   };
 }

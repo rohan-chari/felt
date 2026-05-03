@@ -496,6 +496,58 @@ export function startHand(opts: StartHandOptions): { state: HandState; effects: 
   return { state, effects };
 }
 
+/**
+ * Force-fold a specific seat regardless of whose turn it is. Used for mid-hand
+ * disconnects (Phase 5) and host-kick (Phase 10). Behaves as if the player chose
+ * fold: their committed chips stay in the pot, betting continues. If folding
+ * leaves only one alive seat, the hand ends. If the folded seat WAS the current
+ * actor, the turn advances.
+ */
+export function forceFold(state: HandState, seatIdx: number): ApplyResult {
+  if (state.street === "complete" || state.currentSeatIdx === null) {
+    return reject("hand_over", "Hand is already complete");
+  }
+  const seat = state.seats[seatIdx];
+  if (!seat) return reject("bad_seat", `No seat ${seatIdx}`);
+  if (seat.isFolded) return reject("already_folded", `Seat ${seatIdx} is already folded`);
+
+  const next = cloneState(state);
+  const target = next.seats[seatIdx];
+  if (!target) return reject("bad_seat", `No seat ${seatIdx}`);
+  target.isFolded = true;
+  target.hasActed = true;
+
+  const effects: Effect[] = [
+    {
+      kind: "actionTaken",
+      seatIdx,
+      action: { kind: "fold" },
+      chipsCommitted: 0,
+      isAllIn: false,
+    },
+  ];
+
+  // Hand ends if only one alive seat remains.
+  if (aliveSeats(next).length === 1) {
+    const r = endHand(next, true);
+    return { ok: true, state: next, effects: [...effects, ...r.effects] };
+  }
+
+  // If the betting round is now complete (all remaining actionable seats are matched),
+  // advance the street.
+  if (bettingRoundComplete(next)) {
+    effects.push(...advanceStreet(next));
+  } else if (next.currentSeatIdx === seatIdx) {
+    // Force-folded the current actor — pass the turn to the next eligible seat.
+    const nextSeat = nextActiveSeat(next, seatIdx);
+    next.currentSeatIdx = nextSeat;
+    if (nextSeat !== null) effects.push({ kind: "turnChanged", seatIdx: nextSeat });
+  }
+  // Otherwise: turn unchanged, hand continues.
+
+  return { ok: true, state: next, effects };
+}
+
 export function applyAction(
   state: HandState,
   seatIdx: number,

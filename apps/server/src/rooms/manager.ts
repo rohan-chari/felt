@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { applyAction as engineApplyAction, type HandState, startHand } from "@felt/engine";
+import {
+  applyAction as engineApplyAction,
+  forceFold as engineForceFold,
+  type HandState,
+  startHand,
+} from "@felt/engine";
 import type { Action, PlayerId, RoomDelta, RoomId, ServerMessage } from "@felt/shared";
 import { buildHandFromRoom, toHandView } from "./hand.js";
 import {
@@ -33,6 +38,7 @@ type IntentError = { error: { code: string; message: string } };
 
 const ROOM_ID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_ID_LENGTH = 6;
+const INTER_HAND_DELAY_MS = 4000;
 
 function generateRoomId(): RoomId {
   let id = "";
@@ -51,10 +57,40 @@ function findSeatOf(state: RoomState, playerId: PlayerId): number {
   return -1;
 }
 
+function eligibleSeatedSlots(room: RoomState): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < room.seats.length; i++) {
+    const seat = room.seats[i];
+    if (seat?.kind === "taken" && !seat.busted) out.push(i);
+  }
+  return out;
+}
+
+function nextDealerAfter(room: RoomState, currentSlot: number): number {
+  const eligible = eligibleSeatedSlots(room);
+  if (eligible.length === 0) return currentSlot;
+  for (let step = 1; step <= room.seats.length; step++) {
+    const candidate = (currentSlot + step) % room.seats.length;
+    if (eligible.includes(candidate)) return candidate;
+  }
+  return eligible[0] as number;
+}
+
 export class RoomManager {
   private rooms = new Map<RoomId, RoomState>();
   private sessions = new Map<SessionId, SessionInfo>();
   private hands = new Map<RoomId, HandState>();
+  private nextHandTimers = new Map<RoomId, ReturnType<typeof setTimeout>>();
+  private dispatcher: ((effects: Effect[]) => void) | null = null;
+
+  /** Server registers a callback the manager uses to dispatch async effects (e.g., timer-fired hand starts). */
+  setDispatcher(fn: (effects: Effect[]) => void): void {
+    this.dispatcher = fn;
+  }
+
+  private dispatchAsync(effects: Effect[]): void {
+    if (this.dispatcher && effects.length > 0) this.dispatcher(effects);
+  }
 
   createRoom(): RoomId {
     let id = generateRoomId();
@@ -67,7 +103,6 @@ export class RoomManager {
     return this.rooms.has(roomId);
   }
 
-  /** For tests / inspection. */
   getHand(roomId: RoomId): HandState | undefined {
     return this.hands.get(roomId);
   }
@@ -124,7 +159,7 @@ export class RoomManager {
           message: {
             type: "hand.holeCards",
             handId: hand.handId,
-            cards: seat.holeCards as [string, string] as [
+            cards: seat.holeCards as [
               import("@felt/shared").Card,
               import("@felt/shared").Card,
             ],
@@ -135,14 +170,123 @@ export class RoomManager {
     return effects;
   }
 
+  /** After a hand completes, sync each seated player's stack from the engine result back to room.seats. */
+  private applyHandResultToRoom(roomId: RoomId, hand: HandState): Effect[] {
+    let room = this.rooms.get(roomId);
+    if (!room) return [];
+    const effects: Effect[] = [];
+    for (const handSeat of hand.seats) {
+      const slot = findSeatOf(room, handSeat.playerId);
+      if (slot === -1) continue;
+      const existing = room.seats[slot];
+      if (existing?.kind !== "taken") continue;
+      const newStack = handSeat.stack;
+      const busted = newStack <= 0;
+      if (existing.stack === newStack && existing.busted === busted) continue;
+      room = applyEvent(room, {
+        kind: "seatStackUpdated",
+        seatIndex: slot,
+        stack: newStack,
+        busted,
+      });
+      this.rooms.set(roomId, room);
+      effects.push(
+        ...this.broadcastDelta(roomId, {
+          kind: "seatStackUpdated",
+          seatIndex: slot,
+          playerId: handSeat.playerId,
+          stack: newStack,
+          busted,
+        }),
+      );
+    }
+    return effects;
+  }
+
+  /** Broadcast nextHandScheduled and arm the timer that fires startNextHand. */
+  private scheduleNextHand(roomId: RoomId): Effect[] {
+    const room = this.rooms.get(roomId);
+    if (!room) return [];
+    if (!room.gameStarted) return [];
+
+    // Cancel any prior timer.
+    const existing = this.nextHandTimers.get(roomId);
+    if (existing) {
+      clearTimeout(existing);
+      this.nextHandTimers.delete(roomId);
+    }
+
+    const eligible = eligibleSeatedSlots(room).length;
+    if (eligible < 2) {
+      const updated = applyEvent(room, { kind: "nextHandScheduled", at: null });
+      this.rooms.set(roomId, updated);
+      return this.broadcastDelta(roomId, { kind: "nextHandScheduled", at: null });
+    }
+
+    const at = Date.now() + INTER_HAND_DELAY_MS;
+    const updated = applyEvent(room, { kind: "nextHandScheduled", at });
+    this.rooms.set(roomId, updated);
+
+    const timer = setTimeout(() => {
+      this.nextHandTimers.delete(roomId);
+      const effects = this.startNextHand(roomId);
+      this.dispatchAsync(effects);
+    }, INTER_HAND_DELAY_MS);
+    this.nextHandTimers.set(roomId, timer);
+
+    return this.broadcastDelta(roomId, { kind: "nextHandScheduled", at });
+  }
+
+  /** Create the next engine hand from current room state. Used by the auto-advance timer. */
+  private startNextHand(roomId: RoomId): Effect[] {
+    const room = this.rooms.get(roomId);
+    if (!room) return [];
+    const eligible = eligibleSeatedSlots(room);
+    if (eligible.length < 2) {
+      // Cancel scheduling — not enough players.
+      const cleared = applyEvent(room, { kind: "nextHandScheduled", at: null });
+      this.rooms.set(roomId, cleared);
+      return this.broadcastDelta(roomId, { kind: "nextHandScheduled", at: null });
+    }
+
+    // Rotate dealer to the next eligible slot AT or AFTER current nextDealerSlot.
+    let dealerSlot = room.nextDealerSlot;
+    if (!eligible.includes(dealerSlot)) {
+      // Find next eligible slot rotating forward.
+      let found = -1;
+      for (let step = 0; step < room.seats.length; step++) {
+        const candidate = (dealerSlot + step) % room.seats.length;
+        if (eligible.includes(candidate)) {
+          found = candidate;
+          break;
+        }
+      }
+      dealerSlot = found === -1 ? (eligible[0] as number) : found;
+    }
+
+    const { startOpts } = buildHandFromRoom(room, randomUUID(), dealerSlot);
+    const { state: hand } = startHand(startOpts);
+    this.hands.set(roomId, hand);
+
+    // Move dealer marker forward for the NEXT hand.
+    const after = nextDealerAfter(room, dealerSlot);
+    let updated = applyEvent(room, { kind: "nextDealerSlotSet", slot: after });
+    updated = applyEvent(updated, { kind: "nextHandScheduled", at: null });
+    this.rooms.set(roomId, updated);
+
+    const effects: Effect[] = [];
+    effects.push(...this.broadcastDelta(roomId, { kind: "nextHandScheduled", at: null }));
+    effects.push(...this.broadcastHandSnapshot(roomId, hand));
+    effects.push(...this.sendHoleCardsPrivately(roomId, hand));
+    return effects;
+  }
+
   handleJoin(args: JoinArgs): Effect[] | IntentError {
     const room = this.rooms.get(args.roomId);
     if (!room) {
       return { error: { code: "room_not_found", message: `Room ${args.roomId} does not exist` } };
     }
 
-    // Reject if another player in the room already uses this display name
-    // (case-insensitive, trim-equivalent). Same playerId rejoining is allowed.
     const normalize = (s: string) => s.trim().toLowerCase();
     const incoming = normalize(args.displayName);
     for (const existing of room.players.values()) {
@@ -175,7 +319,6 @@ export class RoomManager {
       );
     }
 
-    // If this player owns a seat in an active hand, send them their hole cards privately.
     const activeHand = this.hands.get(args.roomId);
     if (activeHand) {
       const seat = activeHand.seats.find((s) => s.playerId === args.playerId);
@@ -207,24 +350,36 @@ export class RoomManager {
     const room = this.rooms.get(info.roomId);
     if (!room) return [];
 
+    const effects: Effect[] = [];
     let next = room;
-    const deltas: RoomDelta[] = [];
 
-    const seatIndex = findSeatOf(next, info.playerId);
-    if (seatIndex !== -1) {
-      next = applyEvent(next, { kind: "seatLeft", seatIndex });
-      deltas.push({ kind: "seatLeft", seatIndex, playerId: info.playerId });
+    // If this player is currently seated in an active hand, force-fold them in the engine.
+    const hand = this.hands.get(info.roomId);
+    if (hand && hand.street !== "complete") {
+      const seatIdx = hand.seats.findIndex((s) => s.playerId === info.playerId);
+      if (seatIdx !== -1 && !hand.seats[seatIdx]?.isFolded) {
+        const result = engineForceFold(hand, seatIdx);
+        if (result.ok) {
+          this.hands.set(info.roomId, result.state);
+          effects.push(...this.broadcastHandSnapshot(info.roomId, result.state));
+          if (result.state.street === "complete") {
+            effects.push(...this.applyHandResultToRoom(info.roomId, result.state));
+            effects.push(...this.scheduleNextHand(info.roomId));
+          }
+        }
+      }
     }
 
+    // Vacate the room seat (if any) and remove the player from the player list.
+    const slot = findSeatOf(next, info.playerId);
+    if (slot !== -1) {
+      next = applyEvent(next, { kind: "seatLeft", seatIndex: slot });
+      effects.push(...this.broadcastDelta(info.roomId, { kind: "seatLeft", seatIndex: slot, playerId: info.playerId }));
+    }
     next = applyEvent(next, { kind: "playerLeft", playerId: info.playerId });
-    deltas.push({ kind: "playerLeft", playerId: info.playerId });
-
+    effects.push(...this.broadcastDelta(info.roomId, { kind: "playerLeft", playerId: info.playerId }));
     this.rooms.set(info.roomId, next);
 
-    const effects: Effect[] = [];
-    for (const delta of deltas) {
-      effects.push(...this.broadcastDelta(info.roomId, delta));
-    }
     return effects;
   }
 
@@ -267,6 +422,55 @@ export class RoomManager {
     );
   }
 
+  handleSeatRebuy(
+    sessionId: SessionId,
+    args: { amount: number },
+  ): Effect[] | IntentError {
+    const info = this.sessions.get(sessionId);
+    if (!info) return { error: { code: "no_session", message: "Session has not joined a room" } };
+    const room = this.rooms.get(info.roomId);
+    if (!room) return { error: { code: "room_not_found", message: "Room no longer exists" } };
+    const slot = findSeatOf(room, info.playerId);
+    if (slot === -1) return { error: { code: "not_seated", message: "You're not seated" } };
+    const seat = room.seats[slot];
+    if (seat?.kind !== "taken") return { error: { code: "not_seated", message: "Not seated" } };
+    if (!seat.busted) {
+      return { error: { code: "not_busted", message: "You're not busted — no rebuy needed" } };
+    }
+    if (args.amount < room.config.minBuyIn || args.amount > room.config.maxBuyIn) {
+      return {
+        error: {
+          code: "bad_buyin",
+          message: `Buy-in must be between ${room.config.minBuyIn} and ${room.config.maxBuyIn}`,
+        },
+      };
+    }
+    const updated = applyEvent(room, {
+      kind: "seatStackUpdated",
+      seatIndex: slot,
+      stack: args.amount,
+      busted: false,
+    });
+    this.rooms.set(info.roomId, updated);
+    const effects = this.broadcastDelta(info.roomId, {
+      kind: "seatStackUpdated",
+      seatIndex: slot,
+      playerId: info.playerId,
+      stack: args.amount,
+      busted: false,
+    });
+    // If the game is on and we just brought eligible seated count to 2+, schedule next hand.
+    if (
+      updated.gameStarted &&
+      !this.hands.get(info.roomId) &&
+      !updated.nextHandAt &&
+      eligibleSeatedSlots(updated).length >= 2
+    ) {
+      effects.push(...this.scheduleNextHand(info.roomId));
+    }
+    return effects;
+  }
+
   handleGameStart(sessionId: SessionId): Effect[] | IntentError {
     const info = this.sessions.get(sessionId);
     if (!info) return { error: { code: "no_session", message: "Session has not joined a room" } };
@@ -279,14 +483,22 @@ export class RoomManager {
     this.rooms.set(info.roomId, result.state);
     const effects: Effect[] = this.broadcastDelta(info.roomId, result.delta);
 
-    // Create the engine hand
-    const { startOpts } = buildHandFromRoom(result.state, randomUUID(), 0);
+    // Initial dealer = first seated slot.
+    const eligible = eligibleSeatedSlots(result.state);
+    const initialDealer = eligible[0] ?? 0;
+    let updated = applyEvent(result.state, { kind: "nextDealerSlotSet", slot: initialDealer });
+    this.rooms.set(info.roomId, updated);
+
+    const { startOpts } = buildHandFromRoom(updated, randomUUID(), initialDealer);
     const { state: hand } = startHand(startOpts);
     this.hands.set(info.roomId, hand);
 
-    // Broadcast the initial hand.snapshot to everyone
+    // Move dealer marker forward for the NEXT hand.
+    const nextDealer = nextDealerAfter(updated, initialDealer);
+    updated = applyEvent(updated, { kind: "nextDealerSlotSet", slot: nextDealer });
+    this.rooms.set(info.roomId, updated);
+
     effects.push(...this.broadcastHandSnapshot(info.roomId, hand));
-    // Send hole cards privately to each seat owner
     effects.push(...this.sendHoleCardsPrivately(info.roomId, hand));
     return effects;
   }
@@ -321,7 +533,6 @@ export class RoomManager {
     this.hands.set(info.roomId, result.state);
 
     const effects: Effect[] = [];
-    // Broadcast the action (informational)
     let chipsCommitted = 0;
     let isAllIn = false;
     for (const eff of result.effects) {
@@ -339,8 +550,13 @@ export class RoomManager {
         isAllIn,
       }),
     );
-    // Broadcast the new full hand snapshot
     effects.push(...this.broadcastHandSnapshot(info.roomId, result.state));
+
+    // If hand just completed, sync stacks back to room and schedule next hand.
+    if (result.state.street === "complete") {
+      effects.push(...this.applyHandResultToRoom(info.roomId, result.state));
+      effects.push(...this.scheduleNextHand(info.roomId));
+    }
 
     return effects;
   }
