@@ -6,11 +6,23 @@ import { applyServerMessage, initialRoomViewState, type RoomViewState } from "./
 type Action =
   | { kind: "message"; msg: ServerMessage }
   | { kind: "reset" }
-  | { kind: "clearTransientError" };
+  | { kind: "clearTransientError" }
+  | { kind: "pushTransientError"; code: string; message: string; tone: "error" | "info" };
 
 function reducer(state: RoomViewState, action: Action): RoomViewState {
   if (action.kind === "reset") return initialRoomViewState;
   if (action.kind === "clearTransientError") return { ...state, transientError: null };
+  if (action.kind === "pushTransientError") {
+    return {
+      ...state,
+      transientError: {
+        code: action.code,
+        message: action.message,
+        seq: (state.transientError?.seq ?? 0) + 1,
+        tone: action.tone,
+      },
+    };
+  }
   return applyServerMessage(state, action.msg);
 }
 
@@ -18,6 +30,7 @@ export type RoomConnection = {
   view: RoomViewState;
   send: (msg: ClientMessage) => void;
   clearTransientError: () => void;
+  pushTransientError: (code: string, message: string, tone?: "error" | "info") => void;
 };
 
 export function useRoomConnection(args: {
@@ -71,5 +84,12 @@ export function useRoomConnection(args: {
     dispatch({ kind: "clearTransientError" });
   }, []);
 
-  return { view, send, clearTransientError };
+  const pushTransientError = useCallback(
+    (code: string, message: string, tone: "error" | "info" = "error") => {
+      dispatch({ kind: "pushTransientError", code, message, tone });
+    },
+    [],
+  );
+
+  return { view, send, clearTransientError, pushTransientError };
 }

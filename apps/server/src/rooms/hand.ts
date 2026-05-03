@@ -52,6 +52,12 @@ export function toHandView(state: HandState): HandView {
     };
   }
 
+  // Blind/dealer positions: heads-up = dealer is SB; 3+ = SB is dealer+1, BB is dealer+2.
+  const N = state.seats.length;
+  const dealerSeatIdx = state.dealerIdx;
+  const sbSeatIdx = N === 2 ? dealerSeatIdx : (dealerSeatIdx + 1) % N;
+  const bbSeatIdx = N === 2 ? (dealerSeatIdx + 1) % N : (dealerSeatIdx + 2) % N;
+
   return {
     handId: state.handId,
     street: state.street,
@@ -61,6 +67,9 @@ export function toHandView(state: HandState): HandView {
     toMatch: state.toMatch,
     lastRaiseSize: state.lastRaiseSize,
     result,
+    dealerSeatIdx,
+    sbSeatIdx,
+    bbSeatIdx,
   };
 }
 

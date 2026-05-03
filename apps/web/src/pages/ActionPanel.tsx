@@ -5,6 +5,7 @@ type Props = {
   hand: HandView;
   myPlayerId: PlayerId;
   players: Player[];
+  isDealing: boolean;
   onAction: (action: Action) => void;
 };
 
@@ -13,10 +14,14 @@ function nameFor(playerId: PlayerId | null, players: Player[]): string {
   return players.find((p) => p.id === playerId)?.displayName ?? "?";
 }
 
-export function ActionPanel({ hand, myPlayerId, players, onAction }: Props) {
+export function ActionPanel({ hand, myPlayerId, players, isDealing, onAction }: Props) {
   const mySeat = hand.seats.find((s) => s.playerId === myPlayerId);
   const isMyTurn = hand.currentPlayerId === myPlayerId;
   const [raiseTo, setRaiseTo] = useState<string>("");
+
+  if (isDealing) {
+    return <div className="action-panel waiting">Dealing…</div>;
+  }
 
   if (!mySeat || !isMyTurn) {
     return (

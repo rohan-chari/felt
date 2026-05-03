@@ -157,10 +157,10 @@ body {
 .felt-table {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 10;
+  aspect-ratio: 1.9 / 1;
   background: radial-gradient(ellipse at center, var(--felt) 0%, var(--felt-rim) 100%);
   border: 8px solid #6b3a1a;
-  border-radius: 50% / 35%;
+  border-radius: 50% / 50%;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
 }
 
@@ -181,8 +181,8 @@ body {
 
 .seat-slot {
   position: absolute;
-  width: 96px;
-  height: 76px;
+  width: 100px;
+  height: 92px;
 }
 
 .seat {
@@ -218,9 +218,10 @@ body {
   border: 1px solid #ddd;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
   color: var(--text);
-  padding: 6px;
-  gap: 2px;
+  padding: 6px 6px 4px;
+  gap: 4px;
   position: relative;
+  overflow: visible;
 }
 
 .seat-taken.mine {
@@ -343,13 +344,24 @@ body {
   margin-top: 8px;
 }
 
-/* Toast (transient error overlay) */
+.waiting-banner {
+  background: linear-gradient(90deg, #fff5e6, #ffeed0);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+/* Toast (transient overlay) */
 .toast {
   position: fixed;
   top: 16px;
   left: 50%;
   transform: translateX(-50%);
-  background: var(--crimson);
   color: #fff;
   padding: 10px 14px 10px 16px;
   border-radius: 8px;
@@ -361,6 +373,14 @@ body {
   font-size: 14px;
   max-width: 90vw;
   animation: toast-in 180ms ease-out;
+}
+
+.toast-error {
+  background: var(--crimson);
+}
+
+.toast-info {
+  background: #16a34a;
 }
 
 .toast-close {
@@ -539,6 +559,301 @@ body {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.seat-waiting {
+  font-size: 10px;
+  color: var(--accent);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ===== Poker chips ===== */
+.chip-pile {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  --chip-w: 22px;
+  --chip-h: 4px;
+  --chip-overlap: 2px; /* visible portion of each chip below the next */
+}
+
+.chip-pile-sm {
+  --chip-w: 16px;
+  --chip-h: 3px;
+  --chip-overlap: 2px;
+}
+
+.chip-pile-md {
+  --chip-w: 22px;
+  --chip-h: 4px;
+  --chip-overlap: 3px;
+}
+
+.chip-pile-lg {
+  --chip-w: 36px;
+  --chip-h: 6px;
+  --chip-overlap: 4px;
+}
+
+.chip-pile-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.chip-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+/* Tower: stack chips bottom-to-top via flex column-reverse and a NEGATIVE row gap.
+   Every chip has the same fixed dimensions; the gap controls the visible band. */
+.chip-stack-tower {
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  /* Negative gap pulls subsequent chips upward, leaving only --chip-overlap visible. */
+  row-gap: calc(-1 * (var(--chip-h) - var(--chip-overlap)));
+}
+
+.chip {
+  flex: 0 0 auto;
+  width: var(--chip-w);
+  height: var(--chip-h);
+  box-sizing: border-box;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.4);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3);
+  background-image: repeating-linear-gradient(
+    90deg,
+    transparent 0,
+    transparent 3px,
+    rgba(255, 255, 255, 0.55) 3px,
+    rgba(255, 255, 255, 0.55) 5px
+  );
+}
+
+.chip-stack-label {
+  font-size: 9px;
+  color: var(--muted);
+  white-space: nowrap;
+  margin-top: 2px;
+}
+
+.chip-stack-label-value {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.chip-pile-total {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.3px;
+  line-height: 1;
+}
+
+.chip-pile-empty .chip-pile-total {
+  color: var(--muted);
+}
+
+/* Denomination colors */
+.chip-c-1 {
+  background-color: #f8fafc;
+}
+.chip-c-5 {
+  background-color: #dc2626;
+}
+.chip-c-25 {
+  background-color: #16a34a;
+}
+.chip-c-100 {
+  background-color: #1f2937;
+}
+.chip-c-500 {
+  background-color: #7c3aed;
+}
+.chip-c-1000 {
+  background-color: #f59e0b;
+}
+
+/* Hero variant tweaks: bigger label */
+.chip-pile-lg .chip-pile-total {
+  font-size: 18px;
+}
+.chip-pile-lg .chip-stack-label {
+  font-size: 11px;
+}
+
+/* Hero chip pile at the bottom — shows YOUR live stack alongside the cards */
+.hero-chips {
+  position: fixed;
+  bottom: 24px;
+  right: 80px; /* clear the chat toggle on the right edge */
+  background: rgba(255, 255, 255, 0.92);
+  padding: 10px 14px;
+  border-radius: 12px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  z-index: 14;
+}
+
+@media (max-width: 600px) {
+  .hero-chips {
+    right: 12px;
+    bottom: 12px;
+    padding: 6px 10px;
+  }
+}
+
+/* Cosmetic deck (origin for the deal animation) */
+.deck {
+  position: absolute;
+  width: 26px;
+  height: 36px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.deck-card {
+  position: absolute;
+  inset: 0;
+  border: 1px solid #1f3a6e;
+  border-radius: 3px;
+  background: repeating-linear-gradient(
+    45deg,
+    #1f3a6e 0,
+    #1f3a6e 4px,
+    #2a4a85 4px,
+    #2a4a85 8px
+  );
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* Stack effect: each card peeks out a little from the one above */
+.deck-card:nth-child(1) {
+  transform: translate(-3px, -3px);
+}
+.deck-card:nth-child(2) {
+  transform: translate(-1px, -1px);
+}
+.deck-card:nth-child(3) {
+  transform: translate(0, 0);
+}
+
+/* Deal animation flying cards (animated via inline transform + transition) */
+.flying-card {
+  position: absolute;
+  width: 26px;
+  height: 36px;
+  border: 1px solid #1f3a6e;
+  border-radius: 3px;
+  background: repeating-linear-gradient(
+    45deg,
+    #1f3a6e 0,
+    #1f3a6e 4px,
+    #2a4a85 4px,
+    #2a4a85 8px
+  );
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  z-index: 4;
+  /* Default centered transform; the inline style overrides during animation. */
+  transform: translate(-50%, -50%);
+}
+
+/* While dealing, hide each seat's hole cards so the only cards visible are
+   the flying ones; reveal them with a quick fade-in once dealing finishes. */
+.felt-table.dealing .seat-cards {
+  opacity: 0;
+}
+
+.seat-cards {
+  transition: opacity 120ms ease-out;
+}
+
+/* Dealer / SB / BB markers */
+.seat-marker {
+  position: absolute;
+  /* Center the marker on its (left, top) anchor */
+  transform: translate(-50%, -50%);
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  z-index: 3;
+  border: 1.5px solid #fff;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.35);
+  user-select: none;
+  /* Smooth rotation between hands */
+  transition: left 400ms cubic-bezier(0.45, 0, 0.25, 1),
+    top 400ms cubic-bezier(0.45, 0, 0.25, 1);
+}
+
+.marker-d {
+  background: #fafafa;
+  color: #1a1a1a;
+}
+
+.marker-sb {
+  background: #fcd34d;
+  color: #1a1a1a;
+}
+
+.marker-bb {
+  background: var(--crimson);
+  color: #fff;
+}
+
+/* When dealer + SB sit on the same seat (heads-up), nudge them apart so both are readable. */
+.marker-pair-left {
+  transform: translate(calc(-50% - 13px), -50%);
+}
+
+.marker-pair-right {
+  transform: translate(calc(-50% + 13px), -50%);
+}
+
+/* Bet pile (positioned at angle in front of seat) */
+.bet-pile {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.bet-pile-inner {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  /* Soft dark platter to lift chips off the felt without competing with seat tiles */
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: 999px;
+  backdrop-filter: blur(2px);
+}
+
+/* Text inside the bet pile reads against green felt — flip to light */
+.bet-pile .chip-pile-total {
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.bet-pile .chip-stack-label,
+.bet-pile .chip-stack-label-value {
+  color: rgba(255, 255, 255, 0.85);
 }
 
 /* Inter-hand countdown */
@@ -743,11 +1058,11 @@ body {
     word-break: break-all;
   }
   .felt-table {
-    aspect-ratio: 4 / 3;
+    aspect-ratio: 1.1 / 1;
   }
   .seat-slot {
-    width: 60px;
-    height: 50px;
+    width: 70px;
+    height: 70px;
   }
   .seat-empty {
     font-size: 11px;

@@ -459,10 +459,14 @@ export class RoomManager {
       stack: args.amount,
       busted: false,
     });
-    // If the game is on and we just brought eligible seated count to 2+, schedule next hand.
+    // If the game is on, no active hand is in progress, and we just brought eligible
+    // seated count to 2+, schedule the next hand. (A *completed* hand may still sit in
+    // this.hands during the inter-hand pause — that doesn't count as active.)
+    const activeHand = this.hands.get(info.roomId);
+    const handInProgress = activeHand && activeHand.street !== "complete";
     if (
       updated.gameStarted &&
-      !this.hands.get(info.roomId) &&
+      !handInProgress &&
       !updated.nextHandAt &&
       eligibleSeatedSlots(updated).length >= 2
     ) {

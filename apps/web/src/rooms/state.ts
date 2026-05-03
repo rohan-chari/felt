@@ -24,8 +24,13 @@ export type RoomViewState = {
   myHoleCards: { handId: string; cards: [Card, Card] } | null;
   /** Fatal error during initial join — replaces the room view. */
   error: string | null;
-  /** Transient error from a rejected action — shown as a toast over the room view. Monotonic seq lets the toast component re-trigger when the same error fires twice. */
-  transientError: { code: string; message: string; seq: number } | null;
+  /** Transient toast — error (red) or info (green). seq lets the toast component re-trigger when fired twice. */
+  transientError: {
+    code: string;
+    message: string;
+    seq: number;
+    tone: "error" | "info";
+  } | null;
 };
 
 export const initialRoomViewState: RoomViewState = {
@@ -164,6 +169,7 @@ export function applyServerMessage(state: RoomViewState, msg: ServerMessage): Ro
           code: msg.code,
           message: friendlyError(msg.code, msg.message),
           seq: (state.transientError?.seq ?? 0) + 1,
+          tone: "error",
         },
       };
   }

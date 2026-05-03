@@ -29,7 +29,7 @@ export type RoomState = {
 const DEFAULT_CONFIG: InternalRoomConfig = {
   maxSeats: 8,
   minBuyIn: 100,
-  maxBuyIn: 500,
+  maxBuyIn: 2000,
   chatLimit: 50,
 };
 
@@ -162,9 +162,8 @@ export function applyIntent(state: RoomState, intent: RoomIntent): IntentResult 
       if (intent.seatIndex < 0 || intent.seatIndex >= state.seats.length) {
         return reject("bad_seat", `Seat ${intent.seatIndex} is out of range`);
       }
-      if (state.gameStarted) {
-        return reject("game_started", "Game has already started");
-      }
+      // Players can sit any time, including while a game is in progress —
+      // they get dealt in starting the next hand. (See Phase 5: mid-session join.)
       if (!state.players.has(intent.playerId)) {
         return reject("not_in_room", "You are not in this room");
       }

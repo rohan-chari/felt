@@ -78,7 +78,7 @@ describe("RoomManager", () => {
       expect(msg.snapshot.seats).toHaveLength(8);
       expect(msg.snapshot.seats.every((s) => s.kind === "empty")).toBe(true);
       expect(msg.snapshot.chat).toEqual([]);
-      expect(msg.snapshot.config).toEqual({ maxSeats: 8, minBuyIn: 100, maxBuyIn: 500 });
+      expect(msg.snapshot.config).toEqual({ maxSeats: 8, minBuyIn: 100, maxBuyIn: 2000 });
     });
 
     it("rejects a join when displayName collides with another player in the room", () => {

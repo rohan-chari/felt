@@ -50,4 +50,10 @@ export type HandView = {
   toMatch: number;
   lastRaiseSize: number;
   result: HandResultView | null;
+  /** Engine-seat index (matches HandView.seats[]) of the dealer for this hand. */
+  dealerSeatIdx: number;
+  /** Engine-seat index of the small blind. In heads-up this equals dealerSeatIdx. */
+  sbSeatIdx: number;
+  /** Engine-seat index of the big blind. */
+  bbSeatIdx: number;
 };

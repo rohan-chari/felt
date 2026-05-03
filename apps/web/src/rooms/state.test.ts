@@ -183,6 +183,9 @@ describe("applyServerMessage", () => {
       toMatch: 2,
       lastRaiseSize: 2,
       result: null,
+      dealerSeatIdx: 0,
+      sbSeatIdx: 0,
+      bbSeatIdx: 1,
     };
     const s1 = applyServerMessage(s0, {
       type: "room.delta",

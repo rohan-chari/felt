@@ -12,7 +12,7 @@ describe("room (pure)", () => {
       expect(r.chat).toEqual([]);
       expect(r.seats).toHaveLength(8);
       expect(r.seats.every((s) => s.kind === "empty")).toBe(true);
-      expect(r.config).toEqual({ maxSeats: 8, minBuyIn: 100, maxBuyIn: 500, chatLimit: 50 });
+      expect(r.config).toEqual({ maxSeats: 8, minBuyIn: 100, maxBuyIn: 2000, chatLimit: 50 });
     });
 
     it("respects config overrides", () => {
@@ -115,7 +115,7 @@ describe("room (pure)", () => {
       expect(snap.seats[2]).toMatchObject({ kind: "taken", playerId: "p1", stack: 200, busted: false });
       expect(snap.gameStarted).toBe(false);
       expect(snap.chat).toEqual([]);
-      expect(snap.config).toEqual({ maxSeats: 8, minBuyIn: 100, maxBuyIn: 500 });
+      expect(snap.config).toEqual({ maxSeats: 8, minBuyIn: 100, maxBuyIn: 2000 });
     });
   });
 
@@ -220,7 +220,7 @@ describe("room (pure)", () => {
       expect(result).toEqual({ ok: false, code: "bad_buyin", message: expect.any(String) });
     });
 
-    it("rejects sitting after game has started", () => {
+    it("allows sitting after the game has started — joiner is dealt in next hand", () => {
       let r = setup();
       r = applyEvent(r, { kind: "gameStarted" });
       const result = applyIntent(r, {
@@ -229,7 +229,7 @@ describe("room (pure)", () => {
         seatIndex: 0,
         buyIn: 200,
       });
-      expect(result).toEqual({ ok: false, code: "game_started", message: expect.any(String) });
+      expect(result.ok).toBe(true);
     });
   });
 
