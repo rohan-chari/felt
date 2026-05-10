@@ -1,6 +1,7 @@
 import type { Card, HandView, Player, Seat } from "@felt/shared";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChipPile } from "./ChipPile";
+import { CountdownBorder } from "./CountdownBorder";
 
 type TableProps = {
   seats: Seat[];
@@ -93,6 +94,19 @@ function DealAnimation({ cards }: { cards: FlyingCard[] }) {
 
 function nameFor(playerId: string, players: Player[]): string {
   return players.find((p) => p.id === playerId)?.displayName ?? "?";
+}
+
+function initialsFor(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return "?";
+  const parts = trimmed.split(/\s+/);
+  if (parts.length === 1) {
+    const first = parts[0] ?? "";
+    return first.slice(0, 2).toUpperCase();
+  }
+  const a = parts[0]?.[0] ?? "";
+  const b = parts[parts.length - 1]?.[0] ?? "";
+  return (a + b).toUpperCase();
 }
 
 function rankSuitClass(card: Card): string {
@@ -363,10 +377,14 @@ export function Table(props: TableProps) {
         // rebuy back in during the inter-hand pause).
         const handIsLive = !!handSeat && hand?.street !== "complete";
         const liveStack = handIsLive ? (handSeat?.stack ?? seat.stack) : seat.stack;
-        const committed = handSeat?.committedThisRound ?? 0;
 
+        const playerName = nameFor(seat.playerId, players);
         return (
-          <div className="seat-slot" key={seat.index} style={style}>
+          <div
+            className={`seat-slot seat-pc-${seat.index % 8}`}
+            key={seat.index}
+            style={style}
+          >
             <div
               className={[
                 "seat",
@@ -395,16 +413,24 @@ export function Table(props: TableProps) {
                   })()}
                 </div>
               )}
-              <div className="seat-name">
-                {nameFor(seat.playerId, players)}
-                {seat.playerId === hostId && <span className="host-badge"> ★</span>}
+              <div className="seat-avatar" aria-hidden>
+                {initialsFor(playerName)}
               </div>
-              {seat.busted ? (
-                <div className="seat-busted">Busted</div>
-              ) : (
-                <ChipPile amount={liveStack} size="sm" showTotal={true} showLabels={false} />
-              )}
+              <div className="seat-info">
+                <div className="seat-name">
+                  {playerName}
+                  {seat.playerId === hostId && <span className="host-badge">★</span>}
+                </div>
+                {seat.busted ? (
+                  <div className="seat-busted">Busted</div>
+                ) : (
+                  <div className="seat-chips-line">${liveStack}</div>
+                )}
+              </div>
               {isWaiting && <div className="seat-waiting">Next hand</div>}
+              {isCurrent && hand?.currentTurnDeadline && (
+                <CountdownBorder deadline={hand.currentTurnDeadline} />
+              )}
               {seat.playerId === myPlayerId && seat.busted && (
                 <button type="button" className="stand-btn" onClick={onRebuy}>
                   Rebuy

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyAction, forceFold, startHand } from "./engine.js";
+import { applyAction, forceFold, markSittingOut, startHand } from "./engine.js";
 import type { Effect } from "./types.js";
 
 function basicStart(seedSuffix = "1") {
@@ -236,6 +236,131 @@ describe("applyAction — basic", () => {
       // Hand should be complete now
       expect(s.street).toBe("complete");
       const r3 = forceFold(s, 2);
+      expect(r3.ok).toBe(false);
+      if (!r3.ok) expect(r3.code).toBe("hand_over");
+    });
+  });
+
+  describe("actionLog", () => {
+    it("appends an entry per applyAction call (act kind, with seatIdx and action)", () => {
+      const { state } = basicStart();
+      expect(state.actionLog).toEqual([]);
+
+      const r1 = applyAction(state, 0, { kind: "fold" });
+      if (!r1.ok) throw new Error("fail");
+      expect(r1.state.actionLog).toEqual([
+        { kind: "act", seatIdx: 0, action: { kind: "fold" } },
+      ]);
+
+      const r2 = applyAction(r1.state, 1, { kind: "call" });
+      if (!r2.ok) throw new Error("fail");
+      expect(r2.state.actionLog).toEqual([
+        { kind: "act", seatIdx: 0, action: { kind: "fold" } },
+        { kind: "act", seatIdx: 1, action: { kind: "call" } },
+      ]);
+    });
+
+    it("forceFold appends a forceFold entry", () => {
+      const { state } = basicStart();
+      const r = forceFold(state, 2);
+      if (!r.ok) throw new Error("fail");
+      expect(r.state.actionLog).toEqual([{ kind: "forceFold", seatIdx: 2 }]);
+    });
+
+    it("markSittingOut appends a sitOut entry", () => {
+      const { state } = basicStart();
+      const r = markSittingOut(state, 2);
+      if (!r.ok) throw new Error("fail");
+      expect(r.state.actionLog[0]).toEqual({ kind: "sitOut", seatIdx: 2 });
+    });
+  });
+
+  describe("markSittingOut (mid-hand disconnect protection)", () => {
+    it("marks the seat sitting out without folding it; their committed chips stay in the pot", () => {
+      const { state } = basicStart();
+      // Seat 2 is BB (committed 2). Mark them sitting out before any action.
+      const r = markSittingOut(state, 2);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      const seat = r.state.seats[2];
+      expect(seat?.sittingOut).toBe(true);
+      expect(seat?.isFolded).toBe(false);
+      expect(seat?.totalCommitted).toBe(2); // their BB stays in the pot
+      // Stack untouched (still 98 after posting BB).
+      expect(seat?.stack).toBe(98);
+    });
+
+    it("skips the sitting-out seat in turn order", () => {
+      const { state } = basicStart();
+      // Seat 0 (UTG) is current. Sit out seat 1 (SB).
+      const r1 = markSittingOut(state, 1);
+      if (!r1.ok) throw new Error("fail");
+      // UTG calls. Action should jump to BB (seat 2), not SB.
+      const r2 = applyAction(r1.state, 0, { kind: "call" });
+      if (!r2.ok) throw new Error("fail");
+      expect(r2.state.currentSeatIdx).toBe(2);
+    });
+
+    it("advances the turn when the sitting-out seat WAS the current actor", () => {
+      const { state } = basicStart();
+      // Sit out seat 0 (UTG) — currently their turn.
+      const r = markSittingOut(state, 0);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      // Next active is seat 1 (SB).
+      expect(r.state.currentSeatIdx).toBe(1);
+    });
+
+    it("runs cards out and goes to showdown when only one actionable seat remains", () => {
+      // 3-handed: UTG folds. Then SB sits out. BB is the only actionable seat
+      // remaining alongside one alive (committed-only) sitter — engine should
+      // run out the rest of the streets and hit showdown.
+      const { state: initial } = basicStart();
+      const r1 = applyAction(initial, 0, { kind: "fold" });
+      if (!r1.ok) throw new Error("fail");
+      // After fold: SB (seat 1) is current. Sit them out.
+      const r2 = markSittingOut(r1.state, 1);
+      if (!r2.ok) throw new Error("fail");
+      // SB committed 1; not folded. BB is the only actionable. Engine should
+      // immediately advance to showdown via run-out.
+      expect(r2.state.street).toBe("complete");
+      expect(r2.state.result).not.toBeNull();
+      // Total chips should be conserved.
+      const totalEnd = r2.state.seats.reduce((sum, s) => sum + s.stack, 0);
+      const totalStart = r2.state.seats.reduce((sum, s) => sum + s.startingStack, 0);
+      expect(totalEnd).toBe(totalStart);
+    });
+
+    it("rejects sitting out a seat that's already folded, all-in, or sitting out", () => {
+      const { state } = basicStart();
+      const r1 = markSittingOut(state, 99);
+      expect(r1.ok).toBe(false);
+      if (!r1.ok) expect(r1.code).toBe("bad_seat");
+
+      const r2 = applyAction(state, 0, { kind: "fold" });
+      if (!r2.ok) throw new Error("fail");
+      const r3 = markSittingOut(r2.state, 0);
+      expect(r3.ok).toBe(false);
+      if (!r3.ok) expect(r3.code).toBe("already_folded");
+
+      const r4 = markSittingOut(state, 1);
+      if (!r4.ok) throw new Error("fail");
+      const r5 = markSittingOut(r4.state, 1);
+      expect(r5.ok).toBe(false);
+      if (!r5.ok) expect(r5.code).toBe("already_sitting_out");
+    });
+
+    it("rejects sitting out on a complete hand", () => {
+      const { state: initial } = basicStart();
+      let s = initial;
+      const r1 = forceFold(s, 0);
+      if (!r1.ok) throw new Error("fail");
+      s = r1.state;
+      const r2 = forceFold(s, 1);
+      if (!r2.ok) throw new Error("fail");
+      s = r2.state;
+      expect(s.street).toBe("complete");
+      const r3 = markSittingOut(s, 2);
       expect(r3.ok).toBe(false);
       if (!r3.ok) expect(r3.code).toBe("hand_over");
     });

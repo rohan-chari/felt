@@ -1,6 +1,8 @@
 import type {
+  BuyInLedgerEntry,
   Card,
   ChatMessage,
+  HandRecord,
   HandView,
   Player,
   PlayerId,
@@ -22,6 +24,10 @@ export type RoomViewState = {
   hand: HandView | null;
   nextHandAt: number | null;
   myHoleCards: { handId: string; cards: [Card, Card] } | null;
+  /** Completed-hand history for the current room, oldest first. */
+  handHistory: HandRecord[];
+  /** Per-player buy-in totals (initial sit + rebuys). Drives the ledger view. */
+  buyIns: BuyInLedgerEntry[];
   /** Fatal error during initial join — replaces the room view. */
   error: string | null;
   /** Transient toast — error (red) or info (green). seq lets the toast component re-trigger when fired twice. */
@@ -45,6 +51,8 @@ export const initialRoomViewState: RoomViewState = {
   hand: null,
   nextHandAt: null,
   myHoleCards: null,
+  handHistory: [],
+  buyIns: [],
   error: null,
   transientError: null,
 };
@@ -99,6 +107,8 @@ export function applyServerMessage(state: RoomViewState, msg: ServerMessage): Ro
         hand: msg.snapshot.hand,
         nextHandAt: msg.snapshot.nextHandAt,
         myHoleCards: state.myHoleCards, // preserve across snapshots
+        handHistory: state.handHistory, // preserve across snapshots
+        buyIns: msg.snapshot.buyIns,
         error: null,
         transientError: state.transientError,
       };
@@ -152,11 +162,19 @@ export function applyServerMessage(state: RoomViewState, msg: ServerMessage): Ro
           return state;
         case "nextHandScheduled":
           return { ...state, nextHandAt: delta.at };
+        case "buyInsUpdated": {
+          const without = state.buyIns.filter((e) => e.playerId !== delta.playerId);
+          const next = [...without, { playerId: delta.playerId, total: delta.total }];
+          next.sort((a, b) => a.playerId.localeCompare(b.playerId));
+          return { ...state, buyIns: next };
+        }
       }
       return state;
     }
     case "hand.holeCards":
       return { ...state, myHoleCards: { handId: msg.handId, cards: msg.cards } };
+    case "hand.history":
+      return { ...state, handHistory: msg.hands };
     case "error":
       // Pre-join (haven't received a snapshot yet): fatal — shows the prompt with an error.
       // Post-join: transient — surfaced as a toast.

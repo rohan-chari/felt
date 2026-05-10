@@ -6,7 +6,9 @@ import { useRoomConnection } from "../rooms/useRoomConnection";
 import { ActionPanel } from "./ActionPanel";
 import { ChatPanel } from "./ChatPanel";
 import { ChipPile } from "./ChipPile";
+import { HandHistoryPanel } from "./HandHistoryPanel";
 import { HoleCardsHero } from "./HoleCardsHero";
+import { LedgerPanel } from "./LedgerPanel";
 import { NextHandCountdown } from "./NextHandCountdown";
 import "./Room.css";
 import { ShowdownBanner } from "./ShowdownBanner";
@@ -53,13 +55,14 @@ function ShareLink({ url }: { url: string }) {
     }
   };
   return (
-    <div className="share">
-      <span className="share-label">Share:</span>
-      <code className="share-url">{url}</code>
-      <button type="button" className="share-copy" onClick={onCopy}>
-        {copied ? "Copied" : "Copy"}
-      </button>
-    </div>
+    <button
+      type="button"
+      className="share-copy"
+      onClick={onCopy}
+      title={url}
+    >
+      {copied ? "Copied!" : "Copy invite"}
+    </button>
   );
 }
 
@@ -70,6 +73,7 @@ export function Room() {
   const [pendingSeat, setPendingSeat] = useState<number | null>(null);
   const [rebuyOpen, setRebuyOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const playerId = getOrCreatePlayerId();
 
   const { view, send, clearTransientError, pushTransientError } = useRoomConnection({
@@ -80,43 +84,73 @@ export function Room() {
   });
   const isDealing = useDealAnimation(view.hand);
 
+  // Fetch hand history on first join, then again whenever a hand finishes.
+  // The hand snapshot transitions to street === "complete" with a new handId
+  // when a fresh hand wraps; that's our trigger to ask the server for an
+  // updated history list. Per-completion refetch is cheap (read from Postgres).
+  const initialHistoryFetchedRef = useRef(false);
+  const lastCompletedHandIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (view.status !== "joined") return;
+    if (!initialHistoryFetchedRef.current) {
+      initialHistoryFetchedRef.current = true;
+      send({ type: "hand.history" });
+    }
+    const hand = view.hand;
+    if (
+      hand &&
+      hand.street === "complete" &&
+      hand.handId !== lastCompletedHandIdRef.current
+    ) {
+      lastCompletedHandIdRef.current = hand.handId;
+      send({ type: "hand.history" });
+    }
+  }, [view.status, view.hand?.handId, view.hand?.street, send]);
+
   // If join failed (e.g., name_taken), bounce back to the prompt with the error.
   const joinFailed = submitted && view.status === "error";
 
   if (!submitted || joinFailed) {
     return (
-      <div className="room-page">
-        <h1>Room {roomId}</h1>
-        <p>Pick a display name to join.</p>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (displayName.trim().length === 0) return;
-            // On retry after a failed join, ensure we treat this as a fresh attempt.
-            setSubmitted(false);
-            requestAnimationFrame(() => setSubmitted(true));
-          }}
-        >
-          <input
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            placeholder="Your name"
-            autoFocus
-          />
-          <button type="submit" disabled={displayName.trim().length === 0}>
-            Join
-          </button>
-        </form>
-        {joinFailed && view.error && <p className="error">{view.error}</p>}
+      <div className="home-page">
+        <div className="home-card">
+          <h1 className="home-logo">Room</h1>
+          <p className="home-tagline">
+            <span className="room-code">{roomId}</span>
+          </p>
+          <form
+            className="join-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (displayName.trim().length === 0) return;
+              // On retry after a failed join, ensure we treat this as a fresh attempt.
+              setSubmitted(false);
+              requestAnimationFrame(() => setSubmitted(true));
+            }}
+          >
+            <input
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="Your name"
+              autoFocus
+            />
+            <button type="submit" disabled={displayName.trim().length === 0}>
+              Join
+            </button>
+          </form>
+          {joinFailed && view.error && <p className="home-error">{view.error}</p>}
+        </div>
       </div>
     );
   }
 
   if (view.status === "connecting") {
     return (
-      <div className="room-page">
-        <h1>Room {roomId}</h1>
-        <p>Connecting…</p>
+      <div className="home-page">
+        <div className="home-card">
+          <h1 className="home-logo">Room</h1>
+          <p className="home-tagline">Connecting…</p>
+        </div>
       </div>
     );
   }
@@ -149,10 +183,11 @@ export function Room() {
 
   return (
     <div className="room-page">
-      <header className="room-header">
-        <h1>Room {roomId}</h1>
+      <div className="room-topbar">
+        <h1>Room</h1>
+        <span className="room-code">{roomId}</span>
         <ShareLink url={window.location.href} />
-      </header>
+      </div>
 
       {myWaiting && (
         <div className="waiting-banner">
@@ -187,6 +222,9 @@ export function Room() {
               players={view.players}
               isDealing={isDealing}
               onAction={(action) => send({ type: "hand.action", action })}
+              onUseTimeBank={() => send({ type: "hand.useTimeBank" })}
+              onPreAction={(preAction) => send({ type: "hand.preAction", preAction })}
+              onCancelPreAction={() => send({ type: "hand.cancelPreAction" })}
             />
           )}
 
@@ -234,6 +272,25 @@ export function Room() {
       >
         <span className="chat-toggle-arrow">{chatOpen ? "›" : "‹"}</span>
         <span className="chat-toggle-label">Chat</span>
+      </button>
+
+      <aside
+        className={`history-overlay ${historyOpen ? "open" : "closed"}`}
+        aria-hidden={!historyOpen}
+      >
+        <LedgerPanel players={view.players} seats={view.seats} buyIns={view.buyIns} />
+        <HandHistoryPanel hands={view.handHistory} myPlayerId={playerId} />
+      </aside>
+
+      <button
+        type="button"
+        className={`history-toggle ${historyOpen ? "open" : "closed"}`}
+        onClick={() => setHistoryOpen((v) => !v)}
+        aria-label={historyOpen ? "Hide history" : "Show history"}
+        title={historyOpen ? "Hide history" : "Show history"}
+      >
+        <span className="history-toggle-arrow">{historyOpen ? "‹" : "›"}</span>
+        <span className="history-toggle-label">History</span>
       </button>
 
       <HoleCardsHero cards={view.myHoleCards?.cards ?? null} />

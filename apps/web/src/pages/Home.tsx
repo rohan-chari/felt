@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { createRoom } from "../api";
+import "./Room.css";
 
 export function Home() {
   const navigate = useNavigate();
@@ -20,13 +21,15 @@ export function Home() {
   };
 
   return (
-    <div style={{ padding: 32, fontFamily: "system-ui, sans-serif" }}>
-      <h1>Felt</h1>
-      <p>A poker table for your group chat.</p>
-      <button type="button" onClick={onCreate} disabled={busy}>
-        {busy ? "Creating…" : "Create Room"}
-      </button>
-      {error && <p style={{ color: "crimson" }}>{error}</p>}
+    <div className="home-page">
+      <div className="home-card">
+        <h1 className="home-logo">Felt</h1>
+        <p className="home-tagline">A poker table for your group chat.</p>
+        <button type="button" className="home-cta" onClick={onCreate} disabled={busy}>
+          {busy ? "Creating…" : "Create Room"}
+        </button>
+        {error && <p className="home-error">{error}</p>}
+      </div>
     </div>
   );
 }

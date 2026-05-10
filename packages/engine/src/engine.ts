@@ -27,6 +27,8 @@ function cloneSeat(s: SeatState): SeatState {
     hasActed: s.hasActed,
     isFolded: s.isFolded,
     isAllIn: s.isAllIn,
+    sittingOut: s.sittingOut,
+    timeBankUsed: s.timeBankUsed,
   };
 }
 
@@ -44,6 +46,7 @@ function cloneState(state: HandState): HandState {
     toMatch: state.toMatch,
     lastRaiseSize: state.lastRaiseSize,
     result: state.result,
+    actionLog: state.actionLog.slice(),
   };
 }
 
@@ -53,7 +56,7 @@ function nextActiveSeat(state: HandState, fromIdx: number): number | null {
     const idx = (fromIdx + step) % N;
     const seat = state.seats[idx];
     if (!seat) continue;
-    if (seat.isFolded || seat.isAllIn) continue;
+    if (seat.isFolded || seat.isAllIn || seat.sittingOut) continue;
     if (seat.stack <= 0) continue;
     return idx;
   }
@@ -65,7 +68,7 @@ function aliveSeats(state: HandState): SeatState[] {
 }
 
 function actionableSeats(state: HandState): SeatState[] {
-  return state.seats.filter((s) => !s.isFolded && !s.isAllIn);
+  return state.seats.filter((s) => !s.isFolded && !s.isAllIn && !s.sittingOut);
 }
 
 function bettingRoundComplete(state: HandState): boolean {
@@ -443,6 +446,8 @@ export function startHand(opts: StartHandOptions): { state: HandState; effects: 
     hasActed: false,
     isFolded: false,
     isAllIn: false,
+    sittingOut: false,
+    timeBankUsed: false,
   }));
 
   const deck = shuffle(freshDeck(), mulberry32(hashSeed(opts.seed)));
@@ -460,6 +465,7 @@ export function startHand(opts: StartHandOptions): { state: HandState; effects: 
     toMatch: 0,
     lastRaiseSize: opts.blinds.bb,
     result: null,
+    actionLog: [],
   };
 
   // Heads-up: dealer is SB.
@@ -516,6 +522,7 @@ export function forceFold(state: HandState, seatIdx: number): ApplyResult {
   if (!target) return reject("bad_seat", `No seat ${seatIdx}`);
   target.isFolded = true;
   target.hasActed = true;
+  next.actionLog.push({ kind: "forceFold", seatIdx });
 
   const effects: Effect[] = [
     {
@@ -548,6 +555,57 @@ export function forceFold(state: HandState, seatIdx: number): ApplyResult {
   return { ok: true, state: next, effects };
 }
 
+/**
+ * Mark a seat as sitting out the rest of this hand. Used for mid-hand disconnect
+ * protection (Phase 7): the player's committed chips stay in the pot, their hole
+ * cards still play at showdown for what they committed, but they are skipped in
+ * turn order and their remaining stack is preserved. If marking sit-out leaves
+ * only one actionable seat, the engine runs out the cards to showdown.
+ */
+export function markSittingOut(state: HandState, seatIdx: number): ApplyResult {
+  if (state.street === "complete" || state.currentSeatIdx === null) {
+    return reject("hand_over", "Hand is already complete");
+  }
+  const seat = state.seats[seatIdx];
+  if (!seat) return reject("bad_seat", `No seat ${seatIdx}`);
+  if (seat.isFolded) return reject("already_folded", `Seat ${seatIdx} is already folded`);
+  if (seat.sittingOut) {
+    return reject("already_sitting_out", `Seat ${seatIdx} is already sitting out`);
+  }
+
+  const next = cloneState(state);
+  const target = next.seats[seatIdx];
+  if (!target) return reject("bad_seat", `No seat ${seatIdx}`);
+  target.sittingOut = true;
+  // Treat as having "acted" for this round so the round-complete check doesn't
+  // wait on them.
+  target.hasActed = true;
+  next.actionLog.push({ kind: "sitOut", seatIdx });
+
+  const effects: Effect[] = [];
+
+  // Hand ends if only one alive seat remains.
+  if (aliveSeats(next).length === 1) {
+    const r = endHand(next, true);
+    return { ok: true, state: next, effects: [...effects, ...r.effects] };
+  }
+
+  // If marking sit-out leaves <= 1 actionable seat, OR the round is already
+  // complete, advance the street (which itself will run out cards on <=1
+  // actionable).
+  const remainingActionable = actionableSeats(next).length;
+  if (remainingActionable <= 1 || bettingRoundComplete(next)) {
+    effects.push(...advanceStreet(next));
+  } else if (next.currentSeatIdx === seatIdx) {
+    // Was the current actor — pass turn to the next eligible seat.
+    const nextSeat = nextActiveSeat(next, seatIdx);
+    next.currentSeatIdx = nextSeat;
+    if (nextSeat !== null) effects.push({ kind: "turnChanged", seatIdx: nextSeat });
+  }
+
+  return { ok: true, state: next, effects };
+}
+
 export function applyAction(
   state: HandState,
   seatIdx: number,
@@ -562,6 +620,8 @@ export function applyAction(
   const next = cloneState(state);
   const result = validateAndApplyAction(next, seatIdx, action);
   if ("error" in result) return result.error;
+
+  next.actionLog.push({ kind: "act", seatIdx, action });
 
   const effects: Effect[] = [
     ...result.effects,

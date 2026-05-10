@@ -1,7 +1,25 @@
 import { randomUUID } from "node:crypto";
-import type { ClientMessage } from "@felt/shared";
+import type { ClientMessage, HandRecord, PlayerId } from "@felt/shared";
 import uWS, { type HttpResponse, type us_listen_socket, type WebSocket } from "uWebSockets.js";
+import { MemoryPersistence } from "./persistence/memory.js";
+import type { Persistence } from "./persistence/types.js";
 import { type Effect, RoomManager, type SessionId } from "./rooms/manager.js";
+import { replayHand } from "./rooms/hand.js";
+
+/**
+ * Strip hole cards before sending a HandRecord to a specific player. The
+ * requester always sees their own cards; opponents' cards are revealed only
+ * for seats that didn't fold (i.e., that reached showdown).
+ */
+function filterHoleCardsFor(record: HandRecord, requesterId: PlayerId): HandRecord {
+  return {
+    ...record,
+    seats: record.seats.map((s) => ({
+      ...s,
+      holeCards: s.playerId === requesterId || !s.isFolded ? s.holeCards : null,
+    })),
+  };
+}
 
 type WsUserData = {
   sessionId: SessionId;
@@ -10,18 +28,30 @@ type WsUserData = {
 export type ServerHandle = {
   port: number;
   manager: RoomManager;
-  close: () => void;
+  close: () => Promise<void>;
 };
 
 type CreateServerOptions = {
   port: number;
   corsOrigin?: string;
+  /** Persistence backend. Defaults to in-memory (no durability across restarts). */
+  persistence?: Persistence;
+  /** How often to checkpoint live rooms to persistence. Default 10s. */
+  snapshotIntervalMs?: number;
 };
 
+const DEFAULT_SNAPSHOT_INTERVAL_MS = 10_000;
+
 export async function createServer(opts: CreateServerOptions): Promise<ServerHandle> {
+  const persistence = opts.persistence ?? new MemoryPersistence();
   const manager = new RoomManager();
   const sockets = new Map<SessionId, WebSocket<WsUserData>>();
   const corsOrigin = opts.corsOrigin ?? "*";
+
+  // Hydrate from persistence before accepting connections. Each restored room
+  // schedules an eviction timer for every player; reconnects cancel them.
+  const restored = await persistence.loadAll();
+  if (restored.length > 0) manager.restoreFromSnapshots(restored);
 
   const dispatch = (effects: Effect[]): void => {
     for (const effect of effects) {
@@ -37,6 +67,14 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
 
   // Manager uses this for async-fired effects (e.g., the auto-advance timer).
   manager.setDispatcher(dispatch);
+
+  // Persist completed hands to history. Errors are logged and swallowed —
+  // a transient DB blip should not crash the game flow.
+  manager.setHandSink((record) => {
+    void persistence.saveHand(record).catch((e: unknown) => {
+      console.error(`[persistence] saveHand failed for ${record.handId}:`, e);
+    });
+  });
 
   const sendError = (sessionId: SessionId, code: string, message: string): void => {
     dispatch([{ sessionId, message: { type: "error", code, message } }]);
@@ -172,6 +210,83 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
           handleResult(manager.handleSeatRebuy(sessionId, { amount: parsed.amount }));
           return;
         }
+        case "hand.useTimeBank":
+          handleResult(manager.handleUseTimeBank(sessionId));
+          return;
+        case "hand.preAction": {
+          if (!parsed.preAction || typeof parsed.preAction.kind !== "string") {
+            sendError(sessionId, "bad_message", "hand.preAction missing preAction");
+            return;
+          }
+          handleResult(manager.handlePreAction(sessionId, parsed.preAction));
+          return;
+        }
+        case "hand.cancelPreAction":
+          handleResult(manager.handleCancelPreAction(sessionId));
+          return;
+        case "hand.history": {
+          const info = manager.getSessionInfo(sessionId);
+          if (!info) {
+            sendError(sessionId, "no_session", "Session has not joined a room");
+            return;
+          }
+          const { roomId, playerId } = info;
+          void persistence
+            .listHandsByRoom(roomId)
+            .then((hands) => {
+              const filtered = hands.map((h) => filterHoleCardsFor(h, playerId));
+              dispatch([
+                {
+                  sessionId,
+                  message: { type: "hand.history", roomId, hands: filtered },
+                },
+              ]);
+            })
+            .catch((e: unknown) => {
+              console.error(`[persistence] listHandsByRoom failed for ${roomId}:`, e);
+              sendError(sessionId, "history_unavailable", "Could not load hand history");
+            });
+          return;
+        }
+        case "hand.replay": {
+          if (typeof parsed.handId !== "string") {
+            sendError(sessionId, "bad_message", "hand.replay missing handId");
+            return;
+          }
+          const info = manager.getSessionInfo(sessionId);
+          if (!info) {
+            sendError(sessionId, "no_session", "Session has not joined a room");
+            return;
+          }
+          const requestedHandId = parsed.handId;
+          const { roomId, playerId } = info;
+          void persistence
+            .listHandsByRoom(roomId)
+            .then((hands) => {
+              const record = hands.find((h) => h.handId === requestedHandId);
+              if (!record) {
+                sendError(sessionId, "hand_not_found", "That hand isn't in this room's history");
+                return;
+              }
+              try {
+                const frames = replayHand(record, playerId);
+                dispatch([
+                  {
+                    sessionId,
+                    message: { type: "hand.replay", handId: requestedHandId, frames },
+                  },
+                ]);
+              } catch (e: unknown) {
+                console.error(`[replay] reconstruction failed for ${requestedHandId}:`, e);
+                sendError(sessionId, "replay_failed", "Could not replay that hand");
+              }
+            })
+            .catch((e: unknown) => {
+              console.error(`[persistence] listHandsByRoom failed for ${roomId}:`, e);
+              sendError(sessionId, "replay_failed", "Could not load that hand");
+            });
+          return;
+        }
         default:
           sendError(sessionId, "unknown_message", "Unknown message type");
       }
@@ -193,10 +308,37 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
 
   const boundPort = uWS.us_socket_local_port(listenSocket);
 
+  // Periodic snapshot loop. Saves every live room every N ms. Errors are
+  // logged and swallowed — a transient DB blip should not crash the game.
+  const snapshotIntervalMs = opts.snapshotIntervalMs ?? DEFAULT_SNAPSHOT_INTERVAL_MS;
+  const flushAll = async (): Promise<void> => {
+    const blobs = manager.getAllSnapshotBlobs();
+    await Promise.all(
+      blobs.map((blob) =>
+        persistence
+          .saveSnapshot(blob.room.roomId, blob)
+          .catch((e: unknown) => {
+            console.error(`[persistence] saveSnapshot failed for ${blob.room.roomId}:`, e);
+          }),
+      ),
+    );
+  };
+  const snapshotTimer = setInterval(() => {
+    void flushAll();
+  }, snapshotIntervalMs);
+  // Keeping the snapshot loop unref'd so it doesn't block process exit during
+  // tests. Real deployments call close() explicitly.
+  snapshotTimer.unref?.();
+
   return {
     port: boundPort,
     manager,
-    close: () => {
+    close: async () => {
+      clearInterval(snapshotTimer);
+      // Snapshot BEFORE closing client sockets — closing them fires handleLeave
+      // for each, which marks the player sitting out and may end the active
+      // hand. We want the persisted state to capture the live mid-hand snapshot.
+      await flushAll();
       uWS.us_listen_socket_close(listenSocket);
       for (const ws of sockets.values()) {
         try {
@@ -206,6 +348,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
         }
       }
       sockets.clear();
+      // Persistence ownership belongs to the caller — they decide when to close
+      // the underlying pool/connection (especially important for tests that
+      // restart the server against a shared persistence instance).
     },
   };
 }

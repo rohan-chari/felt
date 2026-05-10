@@ -13,14 +13,17 @@
   "dependencies": {
     "@felt/engine": "workspace:*",
     "@felt/shared": "workspace:*",
+    "pg": "^8.20.0",
     "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.51.0"
   },
   "devDependencies": {
+    "@testcontainers/postgresql": "^11.14.0",
     "@types/node": "^22.9.0",
+    "@types/pg": "^8.20.0",
+    "@types/ws": "^8.5.13",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^2.1.4",
-    "ws": "^8.18.0",
-    "@types/ws": "^8.5.13"
+    "ws": "^8.18.0"
   }
 }

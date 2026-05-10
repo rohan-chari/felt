@@ -1,8 +1,9 @@
-export { applyAction, forceFold, startHand } from "./engine.js";
+export { applyAction, forceFold, markSittingOut, startHand } from "./engine.js";
 export type { ApplyResult, ApplyOk, ApplyErr } from "./types.js";
 export type {
   Effect,
   HandConfig,
+  HandLogEntry,
   HandResult,
   HandState,
   PotAward,

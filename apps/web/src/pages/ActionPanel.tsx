@@ -1,5 +1,5 @@
-import type { Action, HandView, Player, PlayerId } from "@felt/shared";
-import { useState } from "react";
+import type { Action, HandView, Player, PlayerId, PreAction } from "@felt/shared";
+import { useEffect, useState } from "react";
 
 type Props = {
   hand: HandView;
@@ -7,6 +7,9 @@ type Props = {
   players: Player[];
   isDealing: boolean;
   onAction: (action: Action) => void;
+  onUseTimeBank: () => void;
+  onPreAction: (preAction: PreAction) => void;
+  onCancelPreAction: () => void;
 };
 
 function nameFor(playerId: PlayerId | null, players: Player[]): string {
@@ -14,21 +17,93 @@ function nameFor(playerId: PlayerId | null, players: Player[]): string {
   return players.find((p) => p.id === playerId)?.displayName ?? "?";
 }
 
-export function ActionPanel({ hand, myPlayerId, players, isDealing, onAction }: Props) {
+export function ActionPanel({
+  hand,
+  myPlayerId,
+  players,
+  isDealing,
+  onAction,
+  onUseTimeBank,
+  onPreAction,
+  onCancelPreAction,
+}: Props) {
   const mySeat = hand.seats.find((s) => s.playerId === myPlayerId);
   const isMyTurn = hand.currentPlayerId === myPlayerId;
   const [raiseTo, setRaiseTo] = useState<string>("");
+  const [queuedPre, setQueuedPre] = useState<PreAction | null>(null);
+
+  // Clear local pre-action state when the hand changes or it becomes my turn
+  // (pre-action either fired or is no longer relevant).
+  useEffect(() => {
+    setQueuedPre(null);
+  }, [hand.handId, isMyTurn]);
 
   if (isDealing) {
     return <div className="action-panel waiting">Dealing…</div>;
   }
 
-  if (!mySeat || !isMyTurn) {
+  // Not seated this hand: show whose turn it is.
+  if (!mySeat) {
     return (
       <div className="action-panel waiting">
         {hand.street === "complete"
           ? "Hand over"
           : `Waiting for ${nameFor(hand.currentPlayerId, players)}…`}
+      </div>
+    );
+  }
+
+  // Seated, in the hand, but not my turn → show pre-action options.
+  if (!isMyTurn) {
+    if (hand.street === "complete") {
+      return <div className="action-panel waiting">Hand over</div>;
+    }
+    if (mySeat.isFolded || mySeat.isAllIn) {
+      return (
+        <div className="action-panel waiting">
+          Waiting for {nameFor(hand.currentPlayerId, players)}…
+        </div>
+      );
+    }
+
+    const pickPre = (pre: PreAction) => {
+      if (queuedPre?.kind === pre.kind) {
+        setQueuedPre(null);
+        onCancelPreAction();
+      } else {
+        setQueuedPre(pre);
+        onPreAction(pre);
+      }
+    };
+
+    return (
+      <div className="action-panel pre-action">
+        <div className="pre-action-label">
+          Waiting for {nameFor(hand.currentPlayerId, players)}…
+        </div>
+        <div className="pre-action-buttons">
+          <button
+            type="button"
+            className={queuedPre?.kind === "fold" ? "selected" : ""}
+            onClick={() => pickPre({ kind: "fold" })}
+          >
+            Fold
+          </button>
+          <button
+            type="button"
+            className={queuedPre?.kind === "checkFold" ? "selected" : ""}
+            onClick={() => pickPre({ kind: "checkFold" })}
+          >
+            Check / Fold
+          </button>
+          <button
+            type="button"
+            className={queuedPre?.kind === "callAny" ? "selected" : ""}
+            onClick={() => pickPre({ kind: "callAny" })}
+          >
+            Call any
+          </button>
+        </div>
       </div>
     );
   }
@@ -71,16 +146,21 @@ export function ActionPanel({ hand, myPlayerId, players, isDealing, onAction }: 
   return (
     <div className="action-panel active">
       <div className="action-buttons">
-        <button type="button" onClick={() => onAction({ kind: "fold" })}>
+        {!mySeat.timeBankUsed && (
+          <button type="button" className="time-bank-btn" onClick={onUseTimeBank} title="Use time bank">
+            +Time
+          </button>
+        )}
+        <button type="button" className="btn-fold" onClick={() => onAction({ kind: "fold" })}>
           Fold
         </button>
         {canCheck && (
-          <button type="button" onClick={() => onAction({ kind: "check" })}>
+          <button type="button" className="btn-check" onClick={() => onAction({ kind: "check" })}>
             Check
           </button>
         )}
         {canCall && (
-          <button type="button" onClick={() => onAction({ kind: "call" })}>
+          <button type="button" className="btn-call" onClick={() => onAction({ kind: "call" })}>
             Call ${Math.min(need, mySeat.stack)}
           </button>
         )}
@@ -99,12 +179,12 @@ export function ActionPanel({ hand, myPlayerId, players, isDealing, onAction }: 
               step={1}
             />
             {canBet && (
-              <button type="button" onClick={onSubmitBet} disabled={!inRangeBet}>
+              <button type="button" className="btn-bet" onClick={onSubmitBet} disabled={!inRangeBet}>
                 Bet
               </button>
             )}
             {canRaise && (
-              <button type="button" onClick={onSubmitRaise} disabled={!inRangeRaise}>
+              <button type="button" className="btn-raise" onClick={onSubmitRaise} disabled={!inRangeRaise}>
                 Raise
               </button>
             )}

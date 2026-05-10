@@ -2,6 +2,7 @@ import { createServer as createNetServer } from "node:net";
 import type { ServerMessage } from "@felt/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
+import { MemoryPersistence } from "./persistence/memory.js";
 import { createServer, type ServerHandle } from "./server.js";
 
 async function freePort(): Promise<number> {
@@ -84,10 +85,13 @@ describe("server (integration)", () => {
   beforeEach(async () => {
     const port = await freePort();
     handle = await createServer({ port });
+    // Shrink the disconnect grace period so reconnect-deferred broadcasts arrive
+    // within a test-friendly window. Default is 60s.
+    handle.manager.disconnectGraceMs = 50;
   });
 
-  afterEach(() => {
-    handle.close();
+  afterEach(async () => {
+    await handle.close();
   });
 
   it("POST /rooms returns a roomId", async () => {
@@ -273,9 +277,10 @@ describe("server (integration)", () => {
     await Promise.all([aBuf.take(), bBuf.take()]); // pA delta + pB snapshot
 
     wsA.send(JSON.stringify({ type: "seat.take", seatIndex: 0, buyIn: 200 }));
-    await Promise.all([aBuf.take(), bBuf.take()]);
+    // seat.take now emits two deltas: seatTaken + buyInsUpdated.
+    await Promise.all([aBuf.takeN(2), bBuf.takeN(2)]);
     wsB.send(JSON.stringify({ type: "seat.take", seatIndex: 1, buyIn: 200 }));
-    await Promise.all([aBuf.take(), bBuf.take()]);
+    await Promise.all([aBuf.takeN(2), bBuf.takeN(2)]);
 
     wsA.send(JSON.stringify({ type: "game.start" }));
     const [a, b] = await Promise.all([aBuf.takeN(3), bBuf.takeN(3)]);
@@ -303,9 +308,10 @@ describe("server (integration)", () => {
     wsB.send(JSON.stringify({ type: "room.join", roomId, playerId: "pB", displayName: "Bob" }));
     await Promise.all([aBuf.take(), bBuf.take()]);
     wsA.send(JSON.stringify({ type: "seat.take", seatIndex: 0, buyIn: 200 }));
-    await Promise.all([aBuf.take(), bBuf.take()]);
+    // seat.take now emits two deltas: seatTaken + buyInsUpdated.
+    await Promise.all([aBuf.takeN(2), bBuf.takeN(2)]);
     wsB.send(JSON.stringify({ type: "seat.take", seatIndex: 1, buyIn: 200 }));
-    await Promise.all([aBuf.take(), bBuf.take()]);
+    await Promise.all([aBuf.takeN(2), bBuf.takeN(2)]);
     wsA.send(JSON.stringify({ type: "game.start" }));
     await Promise.all([aBuf.takeN(3), bBuf.takeN(3)]);
     // Heads-up: pA (dealer = SB) acts first preflop. Fold.
@@ -324,5 +330,74 @@ describe("server (integration)", () => {
     }
     wsA.close();
     wsB.close();
+  });
+});
+
+describe("server (restart restoration)", () => {
+  it("restart restores hot rooms from persistence (mid-hand state included)", async () => {
+    const persistence = new MemoryPersistence();
+    const port1 = await freePort();
+    const h1 = await createServer({ port: port1, persistence, snapshotIntervalMs: 50 });
+    h1.manager.disconnectGraceMs = 60_000;
+
+    let roomId = "";
+    let h1HandId = "";
+    try {
+      roomId = h1.manager.createRoom();
+      const wsA = await openSocket(h1.port);
+      const aBuf = bufferMessages(wsA);
+      wsA.send(JSON.stringify({ type: "room.join", roomId, playerId: "pA", displayName: "Alice" }));
+      await aBuf.take();
+      const wsB = await openSocket(h1.port);
+      const bBuf = bufferMessages(wsB);
+      wsB.send(JSON.stringify({ type: "room.join", roomId, playerId: "pB", displayName: "Bob" }));
+      await Promise.all([aBuf.take(), bBuf.take()]);
+      wsA.send(JSON.stringify({ type: "seat.take", seatIndex: 0, buyIn: 200 }));
+      // seat.take now emits two deltas: seatTaken + buyInsUpdated.
+      await Promise.all([aBuf.takeN(2), bBuf.takeN(2)]);
+      wsB.send(JSON.stringify({ type: "seat.take", seatIndex: 1, buyIn: 200 }));
+      await Promise.all([aBuf.takeN(2), bBuf.takeN(2)]);
+      wsA.send(JSON.stringify({ type: "game.start" }));
+      await Promise.all([aBuf.takeN(3), bBuf.takeN(3)]);
+
+      h1HandId = h1.manager.getHand(roomId)?.handId ?? "";
+      expect(h1HandId).not.toBe("");
+      wsA.close();
+      wsB.close();
+    } finally {
+      // close() runs flushAll, persistence now holds the snapshot.
+      await h1.close();
+    }
+
+    const port2 = await freePort();
+    const h2 = await createServer({ port: port2, persistence, snapshotIntervalMs: 50 });
+    h2.manager.disconnectGraceMs = 60_000;
+    try {
+      expect(h2.manager.hasRoom(roomId)).toBe(true);
+      const restoredHand = h2.manager.getHand(roomId);
+      expect(restoredHand?.handId).toBe(h1HandId);
+      expect(restoredHand?.street).toBe("preflop");
+
+      // Alice reconnects on the new server and gets her seat back + hole cards.
+      const wsA2 = await openSocket(h2.port);
+      const a2Buf = bufferMessages(wsA2);
+      wsA2.send(
+        JSON.stringify({ type: "room.join", roomId, playerId: "pA", displayName: "Alice" }),
+      );
+      const restoredSnap = await a2Buf.take();
+      expect(restoredSnap.type).toBe("room.snapshot");
+      if (restoredSnap.type === "room.snapshot") {
+        expect(restoredSnap.snapshot.hand?.handId).toBe(h1HandId);
+      }
+      const holeMsg = await a2Buf.take();
+      expect(holeMsg.type).toBe("hand.holeCards");
+      if (holeMsg.type === "hand.holeCards") {
+        expect(holeMsg.handId).toBe(h1HandId);
+        expect(holeMsg.cards).toHaveLength(2);
+      }
+      wsA2.close();
+    } finally {
+      await h2.close();
+    }
   });
 });

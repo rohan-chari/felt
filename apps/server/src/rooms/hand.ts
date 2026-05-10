@@ -1,24 +1,57 @@
+import { createHash } from "node:crypto";
 import {
   applyAction,
   calculatePots,
+  forceFold as engineForceFold,
   type HandState,
+  markSittingOut as engineMarkSittingOut,
   startHand,
   type StartHandOptions,
 } from "@felt/engine";
-import type { Action, HandPotView, HandResultView, HandSeatView, HandView } from "@felt/shared";
+import type {
+  Action,
+  HandPotView,
+  HandRecord,
+  HandResultView,
+  HandSeatView,
+  HandView,
+  PlayerId,
+} from "@felt/shared";
 import type { RoomState } from "./room.js";
 
-export function toHandView(state: HandState): HandView {
+/** SHA-256 hex digest. Used for provably-fair seed commitments. */
+export function sha256Hex(input: string): string {
+  return createHash("sha256").update(input).digest("hex");
+}
+
+export function toHandView(
+  state: HandState,
+  currentTurnDeadline: number | null,
+  /**
+   * If provided, reveal hole cards for the seat owned by this player at every
+   * frame (used by replay for the requester's seat). Other seats remain gated
+   * by the standard "complete + not folded" rule.
+   */
+  revealForPlayer?: PlayerId | null,
+): HandView {
   const reveal = state.street === "complete";
-  const seats: HandSeatView[] = state.seats.map((s) => ({
-    playerId: s.playerId,
-    stack: s.stack,
-    committedThisRound: s.committedThisRound,
-    totalCommitted: s.totalCommitted,
-    isFolded: s.isFolded,
-    isAllIn: s.isAllIn,
-    holeCards: reveal && !s.isFolded && s.holeCards ? s.holeCards : null,
-  }));
+  const seats: HandSeatView[] = state.seats.map((s) => {
+    const ownedByRequester =
+      revealForPlayer != null && s.playerId === revealForPlayer;
+    const showCards =
+      ownedByRequester || (reveal && !s.isFolded);
+    return {
+      playerId: s.playerId,
+      stack: s.stack,
+      committedThisRound: s.committedThisRound,
+      totalCommitted: s.totalCommitted,
+      isFolded: s.isFolded,
+      isAllIn: s.isAllIn,
+      holeCards: showCards && s.holeCards ? s.holeCards : null,
+      timeBankUsed: s.timeBankUsed,
+      sittingOut: s.sittingOut,
+    };
+  });
 
   const folded = new Set<number>();
   for (const s of state.seats) if (s.isFolded) folded.add(s.idx);
@@ -70,6 +103,11 @@ export function toHandView(state: HandState): HandView {
     dealerSeatIdx,
     sbSeatIdx,
     bbSeatIdx,
+    currentTurnDeadline,
+    seedHash: sha256Hex(state.seed),
+    // Reveal the raw seed only after the hand completes — anyone can then
+    // re-derive the deck and audit the shuffle against seedHash.
+    revealedSeed: state.street === "complete" ? state.seed : null,
   };
 }
 
@@ -113,6 +151,51 @@ export function buildHandFromRoom(
     seed,
   };
   return { startOpts, seatMap: { playerToSeat } };
+}
+
+/**
+ * Reconstruct a frame-by-frame HandView sequence from a persisted HandRecord.
+ * One frame per state: the initial dealt hand, then one after each entry in the
+ * action log. The requester's own seat reveals hole cards at every frame; other
+ * seats reveal only at the final showdown frame (and only if they didn't fold).
+ *
+ * Throws if the record's seed + actionLog don't replay cleanly under the engine
+ * (would indicate a corrupted persisted record). Determinism of replay is
+ * already covered by engine/replay.test.ts.
+ */
+export function replayHand(record: HandRecord, requesterId: PlayerId): HandView[] {
+  const seats = [...record.seats]
+    .sort((a, b) => a.seatIdx - b.seatIdx)
+    .map((s) => ({ playerId: s.playerId, stack: s.startingStack }));
+
+  const { state: initial } = startHand({
+    handId: record.handId,
+    seats,
+    dealerIdx: record.dealerSeatIdx,
+    blinds: record.blinds,
+    seed: record.seed,
+  });
+
+  const frames: HandView[] = [toHandView(initial, null, requesterId)];
+  let state: HandState = initial;
+  for (const entry of record.actionLog) {
+    let result: ReturnType<typeof applyAction>;
+    if (entry.kind === "act") {
+      result = applyAction(state, entry.seatIdx, entry.action);
+    } else if (entry.kind === "forceFold") {
+      result = engineForceFold(state, entry.seatIdx);
+    } else {
+      result = engineMarkSittingOut(state, entry.seatIdx);
+    }
+    if (!result.ok) {
+      throw new Error(
+        `replay diverged on entry ${entry.kind}/${entry.seatIdx}: ${result.code}`,
+      );
+    }
+    state = result.state;
+    frames.push(toHandView(state, null, requesterId));
+  }
+  return frames;
 }
 
 export { applyAction, startHand, type HandState, type Action };

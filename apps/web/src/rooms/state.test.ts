@@ -14,6 +14,7 @@ const baseSnapshot = {
     config: { maxSeats: 8, minBuyIn: 100, maxBuyIn: 500 },
     hand: null,
     nextHandAt: null,
+    buyIns: [],
   },
 };
 
@@ -177,6 +178,8 @@ describe("applyServerMessage", () => {
           isFolded: false,
           isAllIn: false,
           holeCards: null,
+          timeBankUsed: false,
+          sittingOut: false,
         },
       ],
       currentPlayerId: "p1",
@@ -186,6 +189,9 @@ describe("applyServerMessage", () => {
       dealerSeatIdx: 0,
       sbSeatIdx: 0,
       bbSeatIdx: 1,
+      currentTurnDeadline: null,
+      seedHash: "0".repeat(64),
+      revealedSeed: null,
     };
     const s1 = applyServerMessage(s0, {
       type: "room.delta",

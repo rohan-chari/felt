@@ -24,6 +24,8 @@ export type RoomState = {
   nextDealerSlot: number;
   /** Unix epoch ms when the next hand will auto-deal, if scheduled. */
   nextHandAt: number | null;
+  /** Total chips bought in (initial sit + rebuys) per playerId. Survives stand-up + re-sit. */
+  buyIns: Map<PlayerId, number>;
 };
 
 const DEFAULT_CONFIG: InternalRoomConfig = {
@@ -42,7 +44,8 @@ export type RoomEvent =
   | { kind: "gameStarted" }
   | { kind: "chatMessage"; message: ChatMessage }
   | { kind: "nextHandScheduled"; at: number | null }
-  | { kind: "nextDealerSlotSet"; slot: number };
+  | { kind: "nextDealerSlotSet"; slot: number }
+  | { kind: "buyInIncreased"; playerId: PlayerId; amount: number };
 
 export type RoomIntent =
   | { kind: "seatTake"; playerId: PlayerId; seatIndex: number; buyIn: number }
@@ -76,6 +79,7 @@ export function createRoom(roomId: RoomId, config?: Partial<InternalRoomConfig>)
     chat: [],
     nextDealerSlot: 0,
     nextHandAt: null,
+    buyIns: new Map(),
   };
 }
 
@@ -90,6 +94,7 @@ function cloneState(state: RoomState): RoomState {
     chat: state.chat.slice(),
     nextDealerSlot: state.nextDealerSlot,
     nextHandAt: state.nextHandAt,
+    buyIns: new Map(state.buyIns),
   };
 }
 
@@ -141,6 +146,11 @@ export function applyEvent(state: RoomState, event: RoomEvent): RoomState {
     case "nextDealerSlotSet":
       next.nextDealerSlot = event.slot;
       return next;
+    case "buyInIncreased": {
+      const prev = next.buyIns.get(event.playerId) ?? 0;
+      next.buyIns.set(event.playerId, prev + event.amount);
+      return next;
+    }
   }
 }
 
@@ -252,5 +262,6 @@ export function toSnapshot(state: RoomState): RoomSnapshot {
     },
     hand: null, // Manager merges in active handView before sending.
     nextHandAt: state.nextHandAt,
+    buyIns: [...state.buyIns.entries()].map(([playerId, total]) => ({ playerId, total })),
   };
 }

@@ -32,6 +32,13 @@ export type RoomConfig = {
   maxBuyIn: number;
 };
 
+/**
+ * Total chips a player has bought into this session, summed across the initial
+ * sit-down and any rebuys. Used by the ledger to compute net (current stack -
+ * total buy-in). Players who stand up + re-sit accumulate.
+ */
+export type BuyInLedgerEntry = { playerId: PlayerId; total: number };
+
 export type RoomSnapshot = {
   roomId: RoomId;
   hostId: PlayerId | null;
@@ -44,4 +51,6 @@ export type RoomSnapshot = {
   hand: import("./hand.js").HandView | null;
   /** Unix epoch ms when the next hand will auto-deal, if scheduled. */
   nextHandAt: number | null;
+  /** Per-player total chips bought in (initial sit + rebuys). */
+  buyIns: BuyInLedgerEntry[];
 };

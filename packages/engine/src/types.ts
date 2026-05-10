@@ -14,6 +14,15 @@ export type SeatState = {
   hasActed: boolean;
   isFolded: boolean;
   isAllIn: boolean;
+  /**
+   * True if the seat is sitting out the current hand (e.g., player disconnected
+   * mid-hand and is being protected as "all-in for committed"). Engine skips
+   * them in turn order but their committed chips remain in the pot and their
+   * hole cards still play at showdown for what they committed.
+   */
+  sittingOut: boolean;
+  /** True once the player has spent their per-hand time bank. Manager-set; engine just stores. */
+  timeBankUsed: boolean;
 };
 
 export type HandConfig = {
@@ -37,6 +46,17 @@ export type HandResult = {
   finalStacks: number[];
 };
 
+/**
+ * A persisted record of a single state-mutating operation. Used for hand
+ * history display and to drive deterministic replays. `act` covers normal
+ * player actions through `applyAction`; `forceFold` and `sitOut` cover
+ * the engine's external interventions (host kicks, mid-hand disconnect).
+ */
+export type HandLogEntry =
+  | { kind: "act"; seatIdx: number; action: Action }
+  | { kind: "forceFold"; seatIdx: number }
+  | { kind: "sitOut"; seatIdx: number };
+
 export type HandState = {
   handId: string;
   seed: string;
@@ -50,6 +70,8 @@ export type HandState = {
   toMatch: number;
   lastRaiseSize: number;
   result: HandResult | null;
+  /** Append-only log of every operation that mutated this state. */
+  actionLog: HandLogEntry[];
 };
 
 export type Effect =
