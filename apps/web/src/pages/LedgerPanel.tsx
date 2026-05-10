@@ -1,6 +1,8 @@
-import type { BuyInLedgerEntry, Player, Seat } from "@felt/shared";
+import type { BuyInLedgerEntry, Player, RoomId, Seat } from "@felt/shared";
+import { useState } from "react";
 
 type LedgerPanelProps = {
+  roomId: RoomId | null;
   players: Player[];
   seats: Seat[];
   buyIns: BuyInLedgerEntry[];
@@ -46,8 +48,32 @@ function buildRows(props: LedgerPanelProps): LedgerRow[] {
   return rows;
 }
 
+function formatLedgerText(roomId: RoomId | null, rows: LedgerRow[]): string {
+  if (rows.length === 0) return "No buy-ins yet.";
+  const header = `Felt — Session ledger${roomId ? ` (room ${roomId})` : ""}`;
+  const nameWidth = Math.max(6, ...rows.map((r) => r.displayName.length));
+  const lines = rows.map((r) => {
+    const name = r.displayName.padEnd(nameWidth);
+    const net = `${r.net > 0 ? "+" : ""}$${r.net}`;
+    return `${name}  ${net.padStart(8)}   (buy-in $${r.buyIn}, stack $${r.stack})`;
+  });
+  return [header, ...lines].join("\n");
+}
+
 export function LedgerPanel(props: LedgerPanelProps) {
   const rows = buildRows(props);
+  const [copied, setCopied] = useState(false);
+
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(formatLedgerText(props.roomId, rows));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard might not be available.
+    }
+  };
+
   if (rows.length === 0) {
     return (
       <div className="ledger-panel">
@@ -58,7 +84,12 @@ export function LedgerPanel(props: LedgerPanelProps) {
   }
   return (
     <div className="ledger-panel">
-      <h3 className="ledger-title">Ledger</h3>
+      <div className="ledger-header">
+        <h3 className="ledger-title">Ledger</h3>
+        <button type="button" className="ledger-copy" onClick={onCopy} title="Copy ledger as text">
+          {copied ? "Copied!" : "Copy"}
+        </button>
+      </div>
       <table className="ledger-table">
         <thead>
           <tr>

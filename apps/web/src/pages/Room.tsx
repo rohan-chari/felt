@@ -7,6 +7,7 @@ import { ActionPanel } from "./ActionPanel";
 import { ChatPanel } from "./ChatPanel";
 import { ChipPile } from "./ChipPile";
 import { HandHistoryPanel } from "./HandHistoryPanel";
+import { HandReplayOverlay } from "./HandReplayOverlay";
 import { HoleCardsHero } from "./HoleCardsHero";
 import { LedgerPanel } from "./LedgerPanel";
 import { NextHandCountdown } from "./NextHandCountdown";
@@ -76,7 +77,7 @@ export function Room() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const playerId = getOrCreatePlayerId();
 
-  const { view, send, clearTransientError, pushTransientError } = useRoomConnection({
+  const { view, send, clearTransientError, clearReplay, pushTransientError } = useRoomConnection({
     roomId,
     playerId,
     displayName,
@@ -278,8 +279,17 @@ export function Room() {
         className={`history-overlay ${historyOpen ? "open" : "closed"}`}
         aria-hidden={!historyOpen}
       >
-        <LedgerPanel players={view.players} seats={view.seats} buyIns={view.buyIns} />
-        <HandHistoryPanel hands={view.handHistory} myPlayerId={playerId} />
+        <LedgerPanel
+          roomId={view.roomId}
+          players={view.players}
+          seats={view.seats}
+          buyIns={view.buyIns}
+        />
+        <HandHistoryPanel
+          hands={view.handHistory}
+          myPlayerId={playerId}
+          onOpenReplay={(handId) => send({ type: "hand.replay", handId })}
+        />
       </aside>
 
       <button
@@ -342,6 +352,20 @@ export function Room() {
           onValidationError={pushTransientError}
         />
       )}
+
+      {(() => {
+        if (!view.replay) return null;
+        const record = view.handHistory.find((h) => h.handId === view.replay?.handId);
+        if (!record) return null;
+        return (
+          <HandReplayOverlay
+            record={record}
+            frames={view.replay.frames}
+            myPlayerId={playerId}
+            onClose={clearReplay}
+          />
+        );
+      })()}
     </div>
   );
 }

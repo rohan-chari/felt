@@ -212,7 +212,9 @@ h3 {
   width: 100%;
   display: flex;
   flex-direction: column;
-  padding: 16px 16px 110px;
+  /* Bottom padding clears the fixed action panel + hero cards above it so
+     in-flow content (felt, controls) doesn't slide behind them. */
+  padding: 16px 16px 200px;
   position: relative;
 }
 
@@ -402,14 +404,14 @@ h3 {
 
 .seat-slot {
   position: absolute;
-  width: 110px;
-  height: 110px;
-  /* The slot is positioned by Table.tsx; the inner .seat is the visual tile. */
+  /* Width/height auto so the slot fits its content; the inline transform from
+     Table.tsx (translate(-50%, -50%)) keeps it centered on the angle anchor. */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .seat {
-  width: 100%;
-  height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -645,12 +647,10 @@ h3 {
   border-color: var(--ink);
 }
 
-/* Seat hole cards (peek above the avatar) */
+/* Seat hole cards — sit in flex flow between avatar and name pill. Keeping
+   them inside the slot keeps them clear of the BB/SB markers and bet pile,
+   which both anchor toward the felt center (and stack above bottom seats). */
 .seat-cards {
-  position: absolute;
-  bottom: 100%;
-  left: 50%;
-  transform: translate(-50%, 4px);
   display: flex;
   gap: 3px;
   z-index: 1;
@@ -659,13 +659,13 @@ h3 {
 
 .seat-cards .card-face,
 .seat-cards .card-back {
-  width: 28px;
-  height: 40px;
+  width: 24px;
+  height: 34px;
 }
 
 .seat-cards .card-rank,
 .seat-cards .card-suit {
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .seat-cards .card-rank {
@@ -1103,11 +1103,13 @@ h3 {
 .hole-hero {
   position: fixed;
   left: 50%;
-  bottom: 88px;
+  /* Sit above the action bar. The bar grows with bet/raise rows, so we leave
+     enough room for the worst case (3-row layout with raise input + hint). */
+  bottom: 210px;
   transform: translateX(-50%);
   display: flex;
   align-items: flex-end;
-  z-index: 15;
+  z-index: 17;
   pointer-events: none;
 }
 
@@ -1159,7 +1161,7 @@ h3 {
 
 @media (max-width: 600px) {
   .hole-hero {
-    bottom: 76px;
+    bottom: 190px;
   }
   .hero-card {
     width: 64px;
@@ -1881,13 +1883,37 @@ h3 {
   box-shadow: var(--shadow-hard-sm);
 }
 
-.ledger-title {
+.ledger-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin: 0 0 10px;
+}
+
+.ledger-title {
+  margin: 0;
   font-size: 16px;
   font-weight: 800;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--ink);
+}
+
+.ledger-copy {
+  background: var(--accent);
+  color: var(--ink);
+  border: var(--border-thin);
+  border-radius: var(--radius-pill);
+  padding: 3px 12px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 2px 0 var(--ink);
+}
+
+.ledger-copy:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 0 var(--ink);
 }
 
 .ledger-empty {
@@ -2134,4 +2160,204 @@ h3 {
 .hh-you {
   color: var(--primary-deep);
   font-weight: 700;
+}
+
+.hh-replay-btn {
+  align-self: flex-start;
+  background: var(--primary);
+  color: #fff;
+  border: var(--border-thin);
+  border-radius: var(--radius-pill);
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 2px 0 var(--ink);
+}
+
+.hh-replay-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 0 var(--ink);
+}
+
+/* ===========================================================================
+ * Hand replay overlay
+ * ========================================================================= */
+
+.replay-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(26, 21, 56, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+  padding: 24px;
+}
+
+.replay-modal {
+  background: var(--surface);
+  border: var(--border);
+  border-radius: 24px;
+  box-shadow: var(--shadow-hard);
+  width: min(960px, 100%);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.replay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: var(--border-thin);
+  background: var(--surface-2);
+}
+
+.replay-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.replay-step-label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.replay-close {
+  background: var(--bad);
+  color: #fff;
+  border: var(--border-thin);
+  border-radius: var(--radius-pill);
+  width: 32px;
+  height: 32px;
+  font-size: 18px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 2px 0 var(--ink);
+  line-height: 1;
+}
+
+.replay-close:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 0 var(--ink);
+}
+
+.replay-felt-wrap {
+  padding: 16px;
+  overflow: auto;
+}
+
+.replay-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: var(--border-thin);
+  background: var(--surface-2);
+}
+
+.replay-controls button {
+  background: var(--surface);
+  color: var(--ink);
+  border: var(--border-thin);
+  border-radius: var(--radius-pill);
+  min-width: 36px;
+  height: 32px;
+  padding: 0 10px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 2px 0 var(--ink);
+  font-size: 13px;
+}
+
+.replay-controls button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 0 var(--ink);
+}
+
+.replay-controls button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: 0 1px 0 var(--ink);
+}
+
+.replay-controls .replay-play {
+  background: var(--good);
+  color: #fff;
+}
+
+.replay-scrub {
+  flex: 1;
+  margin-left: 8px;
+  accent-color: var(--primary);
+}
+
+/* ===========================================================================
+ * Pot badge (sits above the board cards in the felt center)
+ * ========================================================================= */
+
+.pot-badge {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  background: rgba(0, 0, 0, 0.42);
+  border: 2px solid var(--accent);
+  border-radius: 14px;
+  padding: 5px 16px;
+  margin-bottom: 10px;
+  color: #fff;
+  letter-spacing: 0.04em;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
+  max-width: 100%;
+}
+
+.pot-badge-row {
+  display: inline-flex;
+  align-items: baseline;
+  column-gap: 8px;
+}
+
+.pot-badge-label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--accent);
+  letter-spacing: 0.1em;
+}
+
+.pot-badge-amount {
+  font-size: 17px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.pot-badge-split {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.82);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .pot-badge {
+    padding: 4px 12px;
+  }
+  .pot-badge-amount {
+    font-size: 15px;
+  }
+  .pot-badge-split {
+    display: none;
+  }
 }

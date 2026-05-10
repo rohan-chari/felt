@@ -4,6 +4,7 @@ import { useState } from "react";
 type Props = {
   hands: HandRecord[];
   myPlayerId: string;
+  onOpenReplay: (handId: string) => void;
 };
 
 function suitGlyph(card: Card): string {
@@ -54,7 +55,7 @@ function actionSummary(action: HandRecord["actionLog"][number]): string {
   }
 }
 
-export function HandHistoryPanel({ hands, myPlayerId }: Props) {
+export function HandHistoryPanel({ hands, myPlayerId, onOpenReplay }: Props) {
   const [openHandId, setOpenHandId] = useState<string | null>(null);
 
   if (hands.length === 0) {
@@ -94,7 +95,13 @@ export function HandHistoryPanel({ hands, myPlayerId }: Props) {
                 )}
                 <span className="hh-toggle">{isOpen ? "▾" : "▸"}</span>
               </button>
-              {isOpen && <HandDetail record={h} myPlayerId={myPlayerId} />}
+              {isOpen && (
+                <HandDetail
+                  record={h}
+                  myPlayerId={myPlayerId}
+                  onOpenReplay={onOpenReplay}
+                />
+              )}
             </li>
           );
         })}
@@ -110,9 +117,21 @@ function winnerName(record: HandRecord, playerId: string): string {
 function HandDetail({
   record,
   myPlayerId,
-}: { record: HandRecord; myPlayerId: string }) {
+  onOpenReplay,
+}: {
+  record: HandRecord;
+  myPlayerId: string;
+  onOpenReplay: (handId: string) => void;
+}) {
   return (
     <div className="hh-detail">
+      <button
+        type="button"
+        className="hh-replay-btn"
+        onClick={() => onOpenReplay(record.handId)}
+      >
+        ▶ Replay this hand
+      </button>
       <div className="hh-detail-row">
         <span className="hh-label">Blinds:</span>
         <span>

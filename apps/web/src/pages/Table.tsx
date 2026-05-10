@@ -143,6 +143,29 @@ function CardBack() {
   return <div className="card-back" />;
 }
 
+function PotBadge({ pots }: { pots: HandView["pots"] }) {
+  const total = pots.reduce((sum, p) => sum + p.amount, 0);
+  const sidePots = pots.slice(1).filter((p) => p.amount > 0);
+  const splitText =
+    sidePots.length > 0
+      ? `main $${pots[0]?.amount ?? 0}${sidePots.map((p, i) => ` · side ${i + 1} $${p.amount}`).join("")}`
+      : null;
+  return (
+    <div
+      className="pot-badge"
+      title={pots
+        .map((p, i) => `${i === 0 ? "Main" : `Side ${i}`}: $${p.amount}`)
+        .join(" · ")}
+    >
+      <div className="pot-badge-row">
+        <span className="pot-badge-label">Pot</span>
+        <span className="pot-badge-amount">${total}</span>
+      </div>
+      {splitText && <div className="pot-badge-split">{splitText}</div>}
+    </div>
+  );
+}
+
 type MarkerPos = { x: number; y: number; angle: number; roomSlot: number };
 
 function markerPosForEngineSeat(
@@ -319,6 +342,9 @@ export function Table(props: TableProps) {
       })}
 
       <div className="felt-center">
+        {hand && hand.pots.length > 0 && hand.pots.some((p) => p.amount > 0) && (
+          <PotBadge pots={hand.pots} />
+        )}
         {hand && hand.board.length > 0 ? (
           <div className="board-row">
             {hand.board.map((c) => (
@@ -396,6 +422,9 @@ export function Table(props: TableProps) {
                 .filter(Boolean)
                 .join(" ")}
             >
+              <div className="seat-avatar" aria-hidden>
+                {initialsFor(playerName)}
+              </div>
               {isInHand && !isFolded && (
                 <div className="seat-cards">
                   {(() => {
@@ -413,9 +442,6 @@ export function Table(props: TableProps) {
                   })()}
                 </div>
               )}
-              <div className="seat-avatar" aria-hidden>
-                {initialsFor(playerName)}
-              </div>
               <div className="seat-info">
                 <div className="seat-name">
                   {playerName}

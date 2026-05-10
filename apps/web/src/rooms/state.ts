@@ -28,6 +28,8 @@ export type RoomViewState = {
   handHistory: HandRecord[];
   /** Per-player buy-in totals (initial sit + rebuys). Drives the ledger view. */
   buyIns: BuyInLedgerEntry[];
+  /** Active replay frames for an opened past hand, or null when no replay is open. */
+  replay: { handId: string; frames: HandView[] } | null;
   /** Fatal error during initial join — replaces the room view. */
   error: string | null;
   /** Transient toast — error (red) or info (green). seq lets the toast component re-trigger when fired twice. */
@@ -53,6 +55,7 @@ export const initialRoomViewState: RoomViewState = {
   myHoleCards: null,
   handHistory: [],
   buyIns: [],
+  replay: null,
   error: null,
   transientError: null,
 };
@@ -109,6 +112,7 @@ export function applyServerMessage(state: RoomViewState, msg: ServerMessage): Ro
         myHoleCards: state.myHoleCards, // preserve across snapshots
         handHistory: state.handHistory, // preserve across snapshots
         buyIns: msg.snapshot.buyIns,
+        replay: state.replay, // preserve across snapshots
         error: null,
         transientError: state.transientError,
       };
@@ -175,6 +179,8 @@ export function applyServerMessage(state: RoomViewState, msg: ServerMessage): Ro
       return { ...state, myHoleCards: { handId: msg.handId, cards: msg.cards } };
     case "hand.history":
       return { ...state, handHistory: msg.hands };
+    case "hand.replay":
+      return { ...state, replay: { handId: msg.handId, frames: msg.frames } };
     case "error":
       // Pre-join (haven't received a snapshot yet): fatal — shows the prompt with an error.
       // Post-join: transient — surfaced as a toast.

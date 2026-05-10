@@ -108,6 +108,7 @@ export function toHandView(
     // Reveal the raw seed only after the hand completes — anyone can then
     // re-derive the deck and audit the shuffle against seedHash.
     revealedSeed: state.street === "complete" ? state.seed : null,
+    pots,
   };
 }
 

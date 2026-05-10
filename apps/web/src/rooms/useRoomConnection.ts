@@ -7,11 +7,13 @@ type Action =
   | { kind: "message"; msg: ServerMessage }
   | { kind: "reset" }
   | { kind: "clearTransientError" }
+  | { kind: "clearReplay" }
   | { kind: "pushTransientError"; code: string; message: string; tone: "error" | "info" };
 
 function reducer(state: RoomViewState, action: Action): RoomViewState {
   if (action.kind === "reset") return initialRoomViewState;
   if (action.kind === "clearTransientError") return { ...state, transientError: null };
+  if (action.kind === "clearReplay") return { ...state, replay: null };
   if (action.kind === "pushTransientError") {
     return {
       ...state,
@@ -30,6 +32,7 @@ export type RoomConnection = {
   view: RoomViewState;
   send: (msg: ClientMessage) => void;
   clearTransientError: () => void;
+  clearReplay: () => void;
   pushTransientError: (code: string, message: string, tone?: "error" | "info") => void;
 };
 
@@ -84,6 +87,10 @@ export function useRoomConnection(args: {
     dispatch({ kind: "clearTransientError" });
   }, []);
 
+  const clearReplay = useCallback(() => {
+    dispatch({ kind: "clearReplay" });
+  }, []);
+
   const pushTransientError = useCallback(
     (code: string, message: string, tone: "error" | "info" = "error") => {
       dispatch({ kind: "pushTransientError", code, message, tone });
@@ -91,5 +98,5 @@ export function useRoomConnection(args: {
     [],
   );
 
-  return { view, send, clearTransientError, pushTransientError };
+  return { view, send, clearTransientError, clearReplay, pushTransientError };
 }

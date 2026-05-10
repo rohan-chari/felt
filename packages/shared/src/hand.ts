@@ -60,6 +60,12 @@ export type HandView = {
   toMatch: number;
   lastRaiseSize: number;
   result: HandResultView | null;
+  /**
+   * Running pot breakdown derived from totalCommitted per seat. One pot in the
+   * common case; multiple when an all-in creates side pots. Includes chips
+   * already committed this round, so it updates live during betting.
+   */
+  pots: HandPotView[];
   /** Engine-seat index (matches HandView.seats[]) of the dealer for this hand. */
   dealerSeatIdx: number;
   /** Engine-seat index of the small blind. In heads-up this equals dealerSeatIdx. */

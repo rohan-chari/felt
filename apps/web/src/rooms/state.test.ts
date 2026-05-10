@@ -192,6 +192,7 @@ describe("applyServerMessage", () => {
       currentTurnDeadline: null,
       seedHash: "0".repeat(64),
       revealedSeed: null,
+      pots: [],
     };
     const s1 = applyServerMessage(s0, {
       type: "room.delta",
