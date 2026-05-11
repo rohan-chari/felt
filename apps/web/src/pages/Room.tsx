@@ -9,6 +9,7 @@ import { ChipPile } from "./ChipPile";
 import { HandHistoryPanel } from "./HandHistoryPanel";
 import { HandReplayOverlay } from "./HandReplayOverlay";
 import { HoleCardsHero } from "./HoleCardsHero";
+import { HostMenu } from "./HostMenu";
 import { LedgerPanel } from "./LedgerPanel";
 import { NextHandCountdown } from "./NextHandCountdown";
 import "./Room.css";
@@ -190,10 +191,37 @@ export function Room() {
         <ShareLink url={window.location.href} />
       </div>
 
-      {myWaiting && (
+      {view.ended ? (
+        <div className="session-banner session-banner-ended">
+          Session ended — final ledger is shown in the History panel.
+        </div>
+      ) : view.paused ? (
+        <div className="session-banner session-banner-paused">
+          Paused by host. Hands will resume when the host hits Resume.
+        </div>
+      ) : null}
+
+      {myWaiting && !view.ended && !view.paused && (
         <div className="waiting-banner">
           You're seated. You'll be dealt in next hand.
         </div>
+      )}
+
+      {isHost && (
+        <HostMenu
+          hostId={playerId}
+          players={view.players}
+          seats={view.seats}
+          config={view.config}
+          paused={view.paused}
+          ended={view.ended}
+          onPause={() => send({ type: "host.pause" })}
+          onResume={() => send({ type: "host.resume" })}
+          onEndSession={() => send({ type: "host.endSession" })}
+          onKick={(targetId) => send({ type: "host.kick", playerId: targetId })}
+          onUpdateSettings={(settings) => send({ type: "host.updateSettings", settings })}
+          onTransferHost={(targetId) => send({ type: "host.transfer", playerId: targetId })}
+        />
       )}
 
       <div className="room-layout">
@@ -229,7 +257,14 @@ export function Room() {
             />
           )}
 
-          {view.hand && <ShowdownBanner hand={view.hand} players={view.players} />}
+          {view.hand && (
+            <ShowdownBanner
+              hand={view.hand}
+              players={view.players}
+              myPlayerId={playerId}
+              onShowCards={() => send({ type: "seat.showCards" })}
+            />
+          )}
 
           <div className="controls">
             {isHost && !view.gameStarted && (

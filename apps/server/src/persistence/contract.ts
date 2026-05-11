@@ -55,6 +55,7 @@ function sampleHandRecord(roomId: string, handId: string, completedAt: number): 
         { playerId: "p2", stack: 198 },
       ],
     },
+    revealedPlayerIds: [],
   };
 }
 

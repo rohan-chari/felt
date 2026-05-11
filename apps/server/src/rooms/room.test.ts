@@ -1,3 +1,4 @@
+import { DEFAULT_ROOM_CONFIG } from "@felt/shared";
 import { describe, expect, it } from "vitest";
 import { applyEvent, applyIntent, createRoom, toSnapshot } from "./room.js";
 
@@ -12,7 +13,7 @@ describe("room (pure)", () => {
       expect(r.chat).toEqual([]);
       expect(r.seats).toHaveLength(8);
       expect(r.seats.every((s) => s.kind === "empty")).toBe(true);
-      expect(r.config).toEqual({ maxSeats: 8, minBuyIn: 100, maxBuyIn: 2000, chatLimit: 50 });
+      expect(r.config).toEqual({ ...DEFAULT_ROOM_CONFIG, chatLimit: 50 });
     });
 
     it("respects config overrides", () => {
@@ -115,7 +116,7 @@ describe("room (pure)", () => {
       expect(snap.seats[2]).toMatchObject({ kind: "taken", playerId: "p1", stack: 200, busted: false });
       expect(snap.gameStarted).toBe(false);
       expect(snap.chat).toEqual([]);
-      expect(snap.config).toEqual({ maxSeats: 8, minBuyIn: 100, maxBuyIn: 2000 });
+      expect(snap.config).toEqual(DEFAULT_ROOM_CONFIG);
     });
   });
 

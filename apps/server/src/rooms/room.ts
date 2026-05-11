@@ -1,13 +1,14 @@
-import type {
-  ChatMessage,
-  ChatMessageId,
-  Player,
-  PlayerId,
-  RoomConfig,
-  RoomDelta,
-  RoomId,
-  RoomSnapshot,
-  Seat,
+import {
+  type ChatMessage,
+  type ChatMessageId,
+  DEFAULT_ROOM_CONFIG,
+  type Player,
+  type PlayerId,
+  type RoomConfig,
+  type RoomDelta,
+  type RoomId,
+  type RoomSnapshot,
+  type Seat,
 } from "@felt/shared";
 
 export type InternalRoomConfig = RoomConfig & { chatLimit: number };
@@ -26,18 +27,23 @@ export type RoomState = {
   nextHandAt: number | null;
   /** Total chips bought in (initial sit + rebuys) per playerId. Survives stand-up + re-sit. */
   buyIns: Map<PlayerId, number>;
+  /** Cumulative chips reclaimed at standup / kick (sum of stack at each departure). */
+  cashedOuts: Map<PlayerId, number>;
+  /** Host paused the room — current hand finishes, no new hand auto-starts until resume. */
+  paused: boolean;
+  /** Host ended the session — room is locked (no new joins, no sit-takes, no hands). */
+  ended: boolean;
 };
 
 const DEFAULT_CONFIG: InternalRoomConfig = {
-  maxSeats: 8,
-  minBuyIn: 100,
-  maxBuyIn: 2000,
+  ...DEFAULT_ROOM_CONFIG,
   chatLimit: 50,
 };
 
 export type RoomEvent =
   | { kind: "playerJoined"; player: Player }
   | { kind: "playerLeft"; playerId: PlayerId }
+  | { kind: "hostChanged"; hostId: PlayerId | null }
   | { kind: "seatTaken"; seatIndex: number; playerId: PlayerId; stack: number }
   | { kind: "seatLeft"; seatIndex: number }
   | { kind: "seatStackUpdated"; seatIndex: number; stack: number; busted: boolean }
@@ -45,7 +51,11 @@ export type RoomEvent =
   | { kind: "chatMessage"; message: ChatMessage }
   | { kind: "nextHandScheduled"; at: number | null }
   | { kind: "nextDealerSlotSet"; slot: number }
-  | { kind: "buyInIncreased"; playerId: PlayerId; amount: number };
+  | { kind: "buyInIncreased"; playerId: PlayerId; amount: number }
+  | { kind: "cashedOutIncreased"; playerId: PlayerId; amount: number }
+  | { kind: "pausedChanged"; paused: boolean }
+  | { kind: "sessionEnded" }
+  | { kind: "configReplaced"; config: InternalRoomConfig };
 
 export type RoomIntent =
   | { kind: "seatTake"; playerId: PlayerId; seatIndex: number; buyIn: number }
@@ -80,6 +90,9 @@ export function createRoom(roomId: RoomId, config?: Partial<InternalRoomConfig>)
     nextDealerSlot: 0,
     nextHandAt: null,
     buyIns: new Map(),
+    cashedOuts: new Map(),
+    paused: false,
+    ended: false,
   };
 }
 
@@ -95,6 +108,9 @@ function cloneState(state: RoomState): RoomState {
     nextDealerSlot: state.nextDealerSlot,
     nextHandAt: state.nextHandAt,
     buyIns: new Map(state.buyIns),
+    cashedOuts: new Map(state.cashedOuts),
+    paused: state.paused,
+    ended: state.ended,
   };
 }
 
@@ -151,6 +167,23 @@ export function applyEvent(state: RoomState, event: RoomEvent): RoomState {
       next.buyIns.set(event.playerId, prev + event.amount);
       return next;
     }
+    case "cashedOutIncreased": {
+      const prev = next.cashedOuts.get(event.playerId) ?? 0;
+      next.cashedOuts.set(event.playerId, prev + event.amount);
+      return next;
+    }
+    case "hostChanged":
+      next.hostId = event.hostId;
+      return next;
+    case "pausedChanged":
+      next.paused = event.paused;
+      return next;
+    case "sessionEnded":
+      next.ended = true;
+      return next;
+    case "configReplaced":
+      next.config = event.config;
+      return next;
   }
 }
 
@@ -259,9 +292,25 @@ export function toSnapshot(state: RoomState): RoomSnapshot {
       maxSeats: state.config.maxSeats,
       minBuyIn: state.config.minBuyIn,
       maxBuyIn: state.config.maxBuyIn,
+      startingStack: state.config.startingStack,
+      smallBlind: state.config.smallBlind,
+      bigBlind: state.config.bigBlind,
+      turnTimerMs: state.config.turnTimerMs,
+      timeBankMs: state.config.timeBankMs,
+      interHandDelayMs: state.config.interHandDelayMs,
+      autoDealEnabled: state.config.autoDealEnabled,
+      showOneShowBoth: state.config.showOneShowBoth,
     },
     hand: null, // Manager merges in active handView before sending.
     nextHandAt: state.nextHandAt,
-    buyIns: [...state.buyIns.entries()].map(([playerId, total]) => ({ playerId, total })),
+    buyIns: [...new Set([...state.buyIns.keys(), ...state.cashedOuts.keys()])].map(
+      (playerId) => ({
+        playerId,
+        total: state.buyIns.get(playerId) ?? 0,
+        cashedOut: state.cashedOuts.get(playerId) ?? 0,
+      }),
+    ),
+    paused: state.paused,
+    ended: state.ended,
   };
 }

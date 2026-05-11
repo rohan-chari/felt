@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(pnpm --filter @felt/web test)"
+      "Bash(pnpm --filter @felt/web test)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\rohan\\\\Documents\\\\felt\" -Directory)",
+      "Bash(Select-Object -First 20)"
     ]
   }
 }

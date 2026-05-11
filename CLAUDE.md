@@ -4,7 +4,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-Phases 0–5 complete. Hands keep coming automatically: after each hand ends, the manager schedules the next one ~4s later via `setTimeout`, dealer rotates to the next non-busted seated slot, blinds rotate accordingly. Players who lose their stack are marked `busted` on `Seat`; they see a "Rebuy" button and submit `seat.rebuy { amount }` to come back. Mid-hand disconnects use `engine.forceFold` to fold the disconnected seat regardless of whose turn it is. Manager dispatches async effects (timer-fired hand starts) via `setDispatcher` callback wired into the server transport. 189 tests (77 server + 19 web + 93 engine).
+Phases 0–10 complete (straddle deferred to Beyond v1).
+
+- **Continuous play (5):** after each hand ends, the manager schedules the next one via `setTimeout`; dealer rotates to the next non-busted seated slot; blinds rotate accordingly. Players who lose their stack are marked `busted` and see a "Rebuy" button (`seat.rebuy { amount }`). Mid-hand disconnects use `engine.forceFold`. Manager dispatches async effects via `setDispatcher` wired into the server transport.
+- **Turn timers & pre-actions (6):** server-authoritative timer at `manager.ts:armTurnTimer` (now read from `room.config.turnTimerMs`); `hand.snapshot` carries `currentTurnDeadline`; client renders a draining gold→red ring (`CountdownBorder.tsx`); auto-fold-or-check on expiry; per-hand time bank (one use) via `seat.useTimeBank`; pre-action queue (Fold / Check-fold / Call any) with cancel.
+- **Reconnects & snapshots (7):** `playerId` persisted in `localStorage` via `identity.ts`; on rejoin the server detects the returning seat via `wasPresent`, cancels eviction, and re-sends hole cards privately; room state snapshotted to Postgres every 10s and restored on server boot. "Switch identity" button on Home calls `resetPlayerId()`.
+- **Hand history & ledger (8):** every completed hand persisted to Postgres (seed, action log, board, hole cards, pot results, revealed-player list); `HandHistoryPanel` lists past hands and opens a step-through `HandReplayOverlay`; `LedgerPanel` shows live buy-ins / stack / net (net = stack + cashedOut − totalBuyIn) with copy-as-text; `seedHash` published at hand start, `seed` revealed at hand end.
+- **Host controls & room settings (10):**
+  - `RoomConfig` extended with `smallBlind`, `bigBlind`, `startingStack`, `turnTimerMs`, `timeBankMs`, `interHandDelayMs`, `autoDealEnabled`, `showOneShowBoth`. `DEFAULT_ROOM_CONFIG` exported from `@felt/shared`.
+  - `POST /rooms` accepts settings body (`validateRoomSettings` in `apps/server/src/rooms/settings.ts`); Home page has a "Customize settings" form.
+  - Host actions: `host.pause` / `host.resume` (between-hands only), `host.kick { playerId }` (force-folds mid-hand, vacates seat as cash-out, removes from room, sends `error { code: "kicked" }` to their sessions), `host.endSession` (locks the room — no new joins/sits/hands), `host.updateSettings { settings }` (validated; auto-deal toggle reactively gates the next-hand timer), `host.transfer { playerId }`. All emit `system: true` chat audit entries via `emitSystemChat`.
+  - `vacateSeat` records cash-out at the seat's current stack before emitting `seatLeft` — fixes the pre-Phase-10 bug where standing up zeroed the ledger.
+  - Host auto-promotion: on eviction of the current host, `pickNextHost` promotes the lowest-seat-index seated player (falls back to any other room member). Disconnect → grace expiry triggers eviction, which transfers host atomically.
+  - Show-one-show-both (showdown muck-or-show): fold-around winners no longer auto-reveal. Hand state `currentHandReveals` (per room) tracks who's revealed; populated at hand-complete with non-folded seats only for multi-seat showdowns. `seat.showCards` lets the fold-around winner opt to reveal (always both cards in v1). Persisted as `revealedPlayerIds` on `HandRecord`.
+  - HostMenu (top-left, host-only): Pause/Resume, Settings sub-panel (live config edit), Transfer Host list, Kick list, End Session (with confirm). ChatPanel renders system messages italicized. Session banners for paused/ended.
+
+UI is on the cartoon/playful aesthetic: design tokens (`--ink`, `--felt`, `--rail`, `--accent`, player palette `--p0`–`--p7`), `--shadow-hard: 0 4px 0 var(--ink)`, `--border: 2.5px solid var(--ink)`, Fredoka + Nunito fonts.
+
+284 tests (150 server + 32 web + 102 engine; 1 server test skipped — Postgres integration).
 
 ## Project
 

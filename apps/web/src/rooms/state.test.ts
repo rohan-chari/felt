@@ -1,6 +1,8 @@
-import type { ServerMessage } from "@felt/shared";
+import { DEFAULT_ROOM_CONFIG, type ServerMessage } from "@felt/shared";
 import { describe, expect, it } from "vitest";
 import { applyServerMessage, initialRoomViewState } from "./state";
+
+const testConfig = { ...DEFAULT_ROOM_CONFIG, maxBuyIn: 500 };
 
 const baseSnapshot = {
   type: "room.snapshot" as const,
@@ -11,10 +13,12 @@ const baseSnapshot = {
     seats: Array.from({ length: 8 }, (_, index) => ({ kind: "empty" as const, index })),
     gameStarted: false,
     chat: [],
-    config: { maxSeats: 8, minBuyIn: 100, maxBuyIn: 500 },
+    config: testConfig,
     hand: null,
     nextHandAt: null,
     buyIns: [],
+    paused: false,
+    ended: false,
   },
 };
 
@@ -27,7 +31,7 @@ describe("applyServerMessage", () => {
     expect(next.seats).toHaveLength(8);
     expect(next.gameStarted).toBe(false);
     expect(next.chat).toEqual([]);
-    expect(next.config).toEqual({ maxSeats: 8, minBuyIn: 100, maxBuyIn: 500 });
+    expect(next.config).toEqual(testConfig);
   });
 
   it("playerJoined delta appends and keeps sorted by id", () => {

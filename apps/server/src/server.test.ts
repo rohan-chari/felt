@@ -102,6 +102,59 @@ describe("server (integration)", () => {
     expect(handle.manager.hasRoom(body.roomId)).toBe(true);
   });
 
+  it("POST /rooms accepts settings in the body and applies them to the new room", async () => {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/rooms`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        smallBlind: 5,
+        bigBlind: 10,
+        maxSeats: 4,
+        autoDealEnabled: false,
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { roomId: string };
+    const room = (handle.manager as unknown as {
+      rooms: Map<string, import("./rooms/room.js").RoomState>;
+    }).rooms.get(body.roomId);
+    expect(room?.config.smallBlind).toBe(5);
+    expect(room?.config.bigBlind).toBe(10);
+    expect(room?.config.maxSeats).toBe(4);
+    expect(room?.config.autoDealEnabled).toBe(false);
+    // Untouched fields keep defaults.
+    expect(room?.config.turnTimerMs).toBe(30_000);
+  });
+
+  it("POST /rooms rejects invalid settings with a 400", async () => {
+    const cases: Array<{ name: string; body: Record<string, unknown> }> = [
+      { name: "sb >= bb", body: { smallBlind: 10, bigBlind: 5 } },
+      { name: "negative blind", body: { smallBlind: -1 } },
+      { name: "maxSeats out of [2,9]", body: { maxSeats: 12 } },
+      { name: "buyIn range inverted", body: { minBuyIn: 500, maxBuyIn: 100 } },
+      { name: "non-numeric timer", body: { turnTimerMs: "thirty" } },
+    ];
+    for (const c of cases) {
+      const res = await fetch(`http://127.0.0.1:${handle.port}/rooms`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(c.body),
+      });
+      expect(res.status, c.name).toBe(400);
+      const body = (await res.json()) as { error?: string };
+      expect(body.error, c.name).toBeTruthy();
+    }
+  });
+
+  it("POST /rooms rejects malformed JSON with a 400", async () => {
+    const res = await fetch(`http://127.0.0.1:${handle.port}/rooms`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{not json",
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("GET /health returns ok", async () => {
     const res = await fetch(`http://127.0.0.1:${handle.port}/health`);
     expect(res.status).toBe(200);

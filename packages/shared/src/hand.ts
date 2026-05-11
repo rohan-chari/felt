@@ -126,4 +126,10 @@ export type HandRecord = {
   actionLog: HandLogEntryView[];
   /** Pot awards + final stacks. */
   result: HandResultView;
+  /**
+   * Players whose hole cards should be visible in the historical record.
+   * - Multi-seat showdowns: every non-folded seat (they must show).
+   * - Fold-around: empty unless the winner opted in via seat.showCards.
+   */
+  revealedPlayerIds: PlayerId[];
 };

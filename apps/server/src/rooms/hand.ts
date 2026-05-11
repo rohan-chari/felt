@@ -33,13 +33,20 @@ export function toHandView(
    * by the standard "complete + not folded" rule.
    */
   revealForPlayer?: PlayerId | null,
+  /**
+   * Players whose hole cards should be visible at hand completion. The manager
+   * pre-fills this with all non-folded seats for real showdowns (multiple
+   * non-folded). For fold-around endings the set starts empty and the winner
+   * can opt in via seat.showCards.
+   */
+  revealedPlayerIds?: ReadonlySet<PlayerId>,
 ): HandView {
   const reveal = state.street === "complete";
   const seats: HandSeatView[] = state.seats.map((s) => {
     const ownedByRequester =
       revealForPlayer != null && s.playerId === revealForPlayer;
-    const showCards =
-      ownedByRequester || (reveal && !s.isFolded);
+    const explicitlyRevealed = revealedPlayerIds?.has(s.playerId) ?? false;
+    const showCards = ownedByRequester || (reveal && explicitlyRevealed);
     return {
       playerId: s.playerId,
       stack: s.stack,
@@ -148,7 +155,7 @@ export function buildHandFromRoom(
     handId: `${room.roomId}-${Date.now()}`,
     seats: seatedPlayers,
     dealerIdx: engineDealerIdx,
-    blinds: { sb: 1, bb: 2 },
+    blinds: { sb: room.config.smallBlind, bb: room.config.bigBlind },
     seed,
   };
   return { startOpts, seatMap: { playerToSeat } };
@@ -177,7 +184,8 @@ export function replayHand(record: HandRecord, requesterId: PlayerId): HandView[
     seed: record.seed,
   });
 
-  const frames: HandView[] = [toHandView(initial, null, requesterId)];
+  const revealedSet = new Set(record.revealedPlayerIds);
+  const frames: HandView[] = [toHandView(initial, null, requesterId, revealedSet)];
   let state: HandState = initial;
   for (const entry of record.actionLog) {
     let result: ReturnType<typeof applyAction>;
@@ -194,7 +202,7 @@ export function replayHand(record: HandRecord, requesterId: PlayerId): HandView[
       );
     }
     state = result.state;
-    frames.push(toHandView(state, null, requesterId));
+    frames.push(toHandView(state, null, requesterId, revealedSet));
   }
   return frames;
 }

@@ -29,11 +29,17 @@ export function ChatPanel({ messages, onSend }: Props) {
         {messages.length === 0 ? (
           <div className="chat-empty">No messages yet.</div>
         ) : (
-          messages.map((m) => (
-            <div className="chat-msg" key={m.id}>
-              <span className="chat-author">{m.displayName}:</span> {m.text}
-            </div>
-          ))
+          messages.map((m) =>
+            m.system ? (
+              <div className="chat-msg chat-msg-system" key={m.id}>
+                {m.text}
+              </div>
+            ) : (
+              <div className="chat-msg" key={m.id}>
+                <span className="chat-author">{m.displayName}:</span> {m.text}
+              </div>
+            ),
+          )
         )}
       </div>
       <form className="chat-input" onSubmit={submit}>

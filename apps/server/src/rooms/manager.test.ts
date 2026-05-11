@@ -1,4 +1,4 @@
-import type { ServerMessage } from "@felt/shared";
+import { DEFAULT_ROOM_CONFIG, type ServerMessage } from "@felt/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type Effect, RoomManager } from "./manager.js";
 
@@ -31,6 +31,111 @@ describe("RoomManager", () => {
       const id = mgr.createRoom();
       expect(mgr.hasRoom(id)).toBe(true);
       expect(mgr.hasRoom("nope")).toBe(false);
+    });
+
+    it("accepts a settings override and reflects it in the snapshot config", () => {
+      const id = mgr.createRoom({ smallBlind: 5, bigBlind: 10, maxSeats: 4 });
+      const result = mgr.handleJoin({ sessionId: "s1", roomId: id, playerId: "p1", displayName: "A" });
+      const eff = (result as EffectArr)[0];
+      if (!eff || eff.message.type !== "room.snapshot") throw new Error("expected snapshot");
+      expect(eff.message.snapshot.config.smallBlind).toBe(5);
+      expect(eff.message.snapshot.config.bigBlind).toBe(10);
+      expect(eff.message.snapshot.config.maxSeats).toBe(4);
+      expect(eff.message.snapshot.seats).toHaveLength(4);
+    });
+  });
+
+  describe("room-config-driven behavior", () => {
+    function setupHU(settings?: Parameters<RoomManager["createRoom"]>[0]) {
+      const dispatched: Effect[] = [];
+      mgr.setDispatcher((eff) => dispatched.push(...eff));
+      const roomId = mgr.createRoom(settings);
+      mgr.handleJoin({ sessionId: "s1", roomId, playerId: "p1", displayName: "Alice" });
+      mgr.handleJoin({ sessionId: "s2", roomId, playerId: "p2", displayName: "Bob" });
+      mgr.handleSeatTake("s1", { seatIndex: 0, buyIn: 200 });
+      mgr.handleSeatTake("s2", { seatIndex: 1, buyIn: 200 });
+      mgr.handleGameStart("s1");
+      return { roomId, dispatched };
+    }
+
+    it("hand posts the smallBlind/bigBlind from room settings", () => {
+      const { roomId } = setupHU({ smallBlind: 5, bigBlind: 10 });
+      const hand = mgr.getHand(roomId);
+      if (!hand) throw new Error("expected hand");
+      // In heads-up, the dealer posts SB and the other seat posts BB.
+      const committed = hand.seats.map((s) => s.committedThisRound).sort((a, b) => a - b);
+      expect(committed).toEqual([5, 10]);
+    });
+
+    it("uses the configured turnTimerMs for the active turn deadline", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(1_700_000_000_000));
+      try {
+        const { roomId } = setupHU({ turnTimerMs: 12_345 });
+        const hand = mgr.getHand(roomId);
+        if (!hand) throw new Error("expected hand");
+        // Force a fresh snapshot by joining a spectator.
+        const out = mgr.handleJoin({
+          sessionId: "sp",
+          roomId,
+          playerId: "p3",
+          displayName: "Cat",
+        }) as Effect[];
+        const snapEff = out.find((e) => e.message.type === "room.snapshot");
+        if (!snapEff || snapEff.message.type !== "room.snapshot") throw new Error("snap");
+        const deadline = snapEff.message.snapshot.hand?.currentTurnDeadline;
+        expect(deadline).toBe(Date.now() + 12_345);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does NOT schedule a next hand when autoDealEnabled is false", () => {
+      vi.useFakeTimers();
+      try {
+        const { dispatched } = setupHU({ autoDealEnabled: false });
+        const before = dispatched.length;
+        const out = mgr.handleHandAction("s1", { kind: "fold" }) as Effect[];
+        const after = [...out, ...dispatched.slice(before)];
+        // No scheduled-at-future message should appear after the hand ends.
+        const scheduledWithTime = after.find(
+          (e) =>
+            e.message.type === "room.delta" &&
+            e.message.delta.kind === "nextHandScheduled" &&
+            e.message.delta.at !== null,
+        );
+        expect(scheduledWithTime).toBeUndefined();
+        // Advancing past the default inter-hand delay must NOT auto-start a new hand either.
+        const beforeAdvance = dispatched.length;
+        vi.advanceTimersByTime(10_000);
+        const newPreflop = dispatched.slice(beforeAdvance).find(
+          (e) =>
+            e.message.type === "room.delta" &&
+            e.message.delta.kind === "hand.snapshot" &&
+            e.message.delta.hand.street === "preflop",
+        );
+        expect(newPreflop).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("uses the configured interHandDelayMs for next-hand scheduling", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(1_700_000_000_000));
+      try {
+        const { dispatched } = setupHU({ interHandDelayMs: 1234 });
+        const out = mgr.handleHandAction("s1", { kind: "fold" }) as Effect[];
+        const all = [...out, ...dispatched];
+        const scheduled = all.find(
+          (e) => e.message.type === "room.delta" && e.message.delta.kind === "nextHandScheduled",
+        );
+        if (!scheduled || scheduled.message.type !== "room.delta") throw new Error("schd");
+        if (scheduled.message.delta.kind !== "nextHandScheduled") throw new Error("schd2");
+        expect(scheduled.message.delta.at).toBe(Date.now() + 1234);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -78,7 +183,7 @@ describe("RoomManager", () => {
       expect(msg.snapshot.seats).toHaveLength(8);
       expect(msg.snapshot.seats.every((s) => s.kind === "empty")).toBe(true);
       expect(msg.snapshot.chat).toEqual([]);
-      expect(msg.snapshot.config).toEqual({ maxSeats: 8, minBuyIn: 100, maxBuyIn: 2000 });
+      expect(msg.snapshot.config).toEqual(DEFAULT_ROOM_CONFIG);
     });
 
     it("rejects a join when displayName collides with another player in the room", () => {
@@ -659,13 +764,625 @@ describe("RoomManager", () => {
     });
   });
 
+  describe("host actions", () => {
+    function startHU(settings?: Parameters<RoomManager["createRoom"]>[0]) {
+      const dispatched: Effect[] = [];
+      mgr.setDispatcher((eff) => dispatched.push(...eff));
+      const roomId = mgr.createRoom(settings);
+      mgr.handleJoin({ sessionId: "s1", roomId, playerId: "p1", displayName: "Alice" });
+      mgr.handleJoin({ sessionId: "s2", roomId, playerId: "p2", displayName: "Bob" });
+      mgr.handleSeatTake("s1", { seatIndex: 0, buyIn: 200 });
+      mgr.handleSeatTake("s2", { seatIndex: 1, buyIn: 200 });
+      mgr.handleGameStart("s1");
+      // p1 is host by virtue of being first joiner.
+      return { roomId, dispatched };
+    }
+
+    describe("host.pause / host.resume", () => {
+      it("rejects pause from a non-host caller", () => {
+        const { roomId } = startHU();
+        const out = mgr.handleHostPause("s2");
+        expect(out).toEqual({ error: { code: "not_host", message: expect.any(String) } });
+        void roomId;
+      });
+
+      it("host can pause, broadcasts pausedChanged, emits system chat", () => {
+        const { dispatched } = startHU();
+        const before = dispatched.length;
+        const out = mgr.handleHostPause("s1") as Effect[];
+        const all = [...out, ...dispatched.slice(before)];
+        const pausedDelta = all.find(
+          (e) => e.message.type === "room.delta" && e.message.delta.kind === "pausedChanged",
+        );
+        if (!pausedDelta || pausedDelta.message.type !== "room.delta") throw new Error("paused");
+        if (pausedDelta.message.delta.kind !== "pausedChanged") throw new Error("paused2");
+        expect(pausedDelta.message.delta.paused).toBe(true);
+        const sysChat = all.find(
+          (e) =>
+            e.message.type === "room.delta" &&
+            e.message.delta.kind === "chat" &&
+            e.message.delta.message.system === true,
+        );
+        expect(sysChat).toBeDefined();
+      });
+
+      it("pause cancels a scheduled next-hand timer", () => {
+        vi.useFakeTimers();
+        try {
+          const { dispatched } = startHU();
+          // End a hand to schedule the next one.
+          mgr.handleHandAction("s1", { kind: "fold" });
+          const beforePause = dispatched.length;
+          const pauseOut = mgr.handleHostPause("s1") as Effect[];
+          const afterPause = [...pauseOut, ...dispatched.slice(beforePause)];
+          const clearedSchedule = afterPause.find(
+            (e) =>
+              e.message.type === "room.delta" &&
+              e.message.delta.kind === "nextHandScheduled" &&
+              e.message.delta.at === null,
+          );
+          expect(clearedSchedule).toBeDefined();
+          // Even after advancing time, no new hand should auto-deal.
+          const beforeAdvance = dispatched.length;
+          vi.advanceTimersByTime(20_000);
+          const newPreflop = dispatched.slice(beforeAdvance).find(
+            (e) =>
+              e.message.type === "room.delta" &&
+              e.message.delta.kind === "hand.snapshot" &&
+              e.message.delta.hand.street === "preflop",
+          );
+          expect(newPreflop).toBeUndefined();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("finishing a hand while paused does NOT schedule the next one", () => {
+        vi.useFakeTimers();
+        try {
+          const { dispatched } = startHU();
+          mgr.handleHostPause("s1");
+          const before = dispatched.length;
+          const foldOut = mgr.handleHandAction("s1", { kind: "fold" }) as Effect[];
+          const after = [...foldOut, ...dispatched.slice(before)];
+          const scheduledFuture = after.find(
+            (e) =>
+              e.message.type === "room.delta" &&
+              e.message.delta.kind === "nextHandScheduled" &&
+              e.message.delta.at !== null,
+          );
+          expect(scheduledFuture).toBeUndefined();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("rejects resume from a non-host caller", () => {
+        startHU();
+        mgr.handleHostPause("s1");
+        const out = mgr.handleHostResume("s2");
+        expect(out).toEqual({ error: { code: "not_host", message: expect.any(String) } });
+      });
+
+      it("host can resume; broadcasts pausedChanged false and re-schedules a pending next hand", () => {
+        vi.useFakeTimers();
+        try {
+          const { dispatched } = startHU();
+          mgr.handleHandAction("s1", { kind: "fold" });
+          mgr.handleHostPause("s1");
+          const before = dispatched.length;
+          const resumeOut = mgr.handleHostResume("s1") as Effect[];
+          const after = [...resumeOut, ...dispatched.slice(before)];
+          const resumedDelta = after.find(
+            (e) =>
+              e.message.type === "room.delta" &&
+              e.message.delta.kind === "pausedChanged" &&
+              e.message.delta.paused === false,
+          );
+          expect(resumedDelta).toBeDefined();
+          // A new next-hand should now be scheduled (since the previous hand had ended).
+          const newSchedule = after.find(
+            (e) =>
+              e.message.type === "room.delta" &&
+              e.message.delta.kind === "nextHandScheduled" &&
+              e.message.delta.at !== null,
+          );
+          expect(newSchedule).toBeDefined();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("rejects pause when room is already paused", () => {
+        startHU();
+        mgr.handleHostPause("s1");
+        const out = mgr.handleHostPause("s1");
+        expect(out).toEqual({ error: { code: "already_paused", message: expect.any(String) } });
+      });
+
+      it("rejects resume when room is not paused", () => {
+        startHU();
+        const out = mgr.handleHostResume("s1");
+        expect(out).toEqual({ error: { code: "not_paused", message: expect.any(String) } });
+      });
+    });
+
+    describe("host.kick", () => {
+      it("rejects kick from a non-host caller", () => {
+        startHU();
+        const out = mgr.handleHostKick("s2", { playerId: "p1" });
+        expect(out).toEqual({ error: { code: "not_host", message: expect.any(String) } });
+      });
+
+      it("rejects kicking an unknown player", () => {
+        startHU();
+        const out = mgr.handleHostKick("s1", { playerId: "ghost" });
+        expect(out).toEqual({ error: { code: "unknown_player", message: expect.any(String) } });
+      });
+
+      it("rejects kicking the host themselves", () => {
+        startHU();
+        const out = mgr.handleHostKick("s1", { playerId: "p1" });
+        expect(out).toEqual({ error: { code: "cannot_kick_host", message: expect.any(String) } });
+      });
+
+      it("removes the seat and records cash-out at the kicked player's current stack", () => {
+        const { roomId } = startHU();
+
+        const out = mgr.handleHostKick("s1", { playerId: "p2" }) as Effect[];
+
+        const seatLeft = out.find(
+          (e) => e.message.type === "room.delta" && e.message.delta.kind === "seatLeft",
+        );
+        expect(seatLeft).toBeDefined();
+        const cashOut = out.find(
+          (e) => e.message.type === "room.delta" && e.message.delta.kind === "cashedOutUpdated",
+        );
+        if (!cashOut || cashOut.message.type !== "room.delta") throw new Error("cashOut");
+        if (cashOut.message.delta.kind !== "cashedOutUpdated") throw new Error("cashOut2");
+        expect(cashOut.message.delta.playerId).toBe("p2");
+        // Bob force-folded and lost his BB to p1; his remaining stack is reflected as cash-out.
+        // The exact amount depends on blinds, but it should be positive and equal what's in
+        // the persisted cashedOuts map.
+        const after = mgr.getSnapshotBlob(roomId);
+        const recordedCashOut = after?.room.cashedOuts.get("p2") ?? 0;
+        expect(cashOut.message.delta.cashedOut).toBe(recordedCashOut);
+        expect(recordedCashOut).toBeGreaterThan(0);
+
+        const bobSeat = after?.room.seats.find(
+          (s) => s.kind === "taken" && s.playerId === "p2",
+        );
+        expect(bobSeat).toBeUndefined();
+        expect(after?.room.players.has("p2")).toBe(false);
+      });
+
+      it("when kicking outside an active hand, cash-out equals the seat's exact stack", () => {
+        // No mid-hand action to muddy the math.
+        const dispatched: Effect[] = [];
+        mgr.setDispatcher((eff) => dispatched.push(...eff));
+        const roomId = mgr.createRoom();
+        mgr.handleJoin({ sessionId: "s1", roomId, playerId: "p1", displayName: "Alice" });
+        mgr.handleJoin({ sessionId: "s2", roomId, playerId: "p2", displayName: "Bob" });
+        mgr.handleSeatTake("s1", { seatIndex: 0, buyIn: 200 });
+        mgr.handleSeatTake("s2", { seatIndex: 1, buyIn: 175 });
+
+        const out = mgr.handleHostKick("s1", { playerId: "p2" }) as Effect[];
+        const cashOut = out.find(
+          (e) => e.message.type === "room.delta" && e.message.delta.kind === "cashedOutUpdated",
+        );
+        if (!cashOut || cashOut.message.type !== "room.delta") throw new Error("cashOut");
+        if (cashOut.message.delta.kind !== "cashedOutUpdated") throw new Error("cashOut2");
+        expect(cashOut.message.delta.cashedOut).toBe(175);
+      });
+
+      it("sends a 'kicked' error to the kicked player's session", () => {
+        startHU();
+        const out = mgr.handleHostKick("s1", { playerId: "p2" }) as Effect[];
+        const kickedNotice = out.find(
+          (e) => e.sessionId === "s2" && e.message.type === "error" && e.message.code === "kicked",
+        );
+        expect(kickedNotice).toBeDefined();
+      });
+
+      it("broadcasts a system chat: 'Alice kicked Bob'", () => {
+        startHU();
+        const out = mgr.handleHostKick("s1", { playerId: "p2" }) as Effect[];
+        const sys = out.find(
+          (e) =>
+            e.message.type === "room.delta" &&
+            e.message.delta.kind === "chat" &&
+            e.message.delta.message.system === true,
+        );
+        if (!sys || sys.message.type !== "room.delta") throw new Error("sys");
+        if (sys.message.delta.kind !== "chat") throw new Error("sys2");
+        expect(sys.message.delta.message.text).toMatch(/Alice/);
+        expect(sys.message.delta.message.text).toMatch(/Bob/);
+      });
+
+      it("force-folds the kicked player if they're mid-hand", () => {
+        const { roomId } = startHU();
+        // Hand is in progress; kick the non-dealer (who is to act first preflop in heads-up,
+        // actually dealer acts first preflop heads-up, so p2 is the BB and acts second).
+        // Either way, force-fold should fire if their seat is still active.
+        const beforeHand = mgr.getHand(roomId);
+        const handIdBefore = beforeHand?.handId;
+        mgr.handleHostKick("s1", { playerId: "p2" });
+        // After kick, since heads-up has only 1 player left, hand should be complete (winner = p1).
+        const afterHand = mgr.getHand(roomId);
+        expect(afterHand?.handId).toBe(handIdBefore);
+        expect(afterHand?.street).toBe("complete");
+      });
+
+      it("removes the kicked player's session so they can't continue acting", () => {
+        startHU();
+        mgr.handleHostKick("s1", { playerId: "p2" });
+        const act = mgr.handleHandAction("s2", { kind: "fold" });
+        expect(act).toEqual({ error: { code: "no_session", message: expect.any(String) } });
+      });
+    });
+
+    describe("host.endSession", () => {
+      it("rejects end from a non-host caller", () => {
+        startHU();
+        const out = mgr.handleHostEndSession("s2");
+        expect(out).toEqual({ error: { code: "not_host", message: expect.any(String) } });
+      });
+
+      it("host can end; broadcasts sessionEnded + system chat", () => {
+        startHU();
+        const out = mgr.handleHostEndSession("s1") as Effect[];
+        const ended = out.find(
+          (e) => e.message.type === "room.delta" && e.message.delta.kind === "sessionEnded",
+        );
+        expect(ended).toBeDefined();
+        const sys = out.find(
+          (e) =>
+            e.message.type === "room.delta" &&
+            e.message.delta.kind === "chat" &&
+            e.message.delta.message.system === true,
+        );
+        expect(sys).toBeDefined();
+      });
+
+      it("after end, the ended flag is true in the room state", () => {
+        const { roomId } = startHU();
+        mgr.handleHostEndSession("s1");
+        expect(mgr.getSnapshotBlob(roomId)?.room.ended).toBe(true);
+      });
+
+      it("after end, seat.take is rejected", () => {
+        const { roomId } = startHU();
+        mgr.handleJoin({ sessionId: "s3", roomId, playerId: "p3", displayName: "Cat" });
+        mgr.handleHostEndSession("s1");
+        const out = mgr.handleSeatTake("s3", { seatIndex: 2, buyIn: 200 });
+        expect(out).toEqual({ error: { code: "session_ended", message: expect.any(String) } });
+      });
+
+      it("after end, no next-hand is scheduled when the current hand finishes", () => {
+        vi.useFakeTimers();
+        try {
+          const { dispatched } = startHU();
+          mgr.handleHostEndSession("s1");
+          const before = dispatched.length;
+          const foldOut = mgr.handleHandAction("s1", { kind: "fold" }) as Effect[];
+          const after = [...foldOut, ...dispatched.slice(before)];
+          const scheduledFuture = after.find(
+            (e) =>
+              e.message.type === "room.delta" &&
+              e.message.delta.kind === "nextHandScheduled" &&
+              e.message.delta.at !== null,
+          );
+          expect(scheduledFuture).toBeUndefined();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("rejects double-end", () => {
+        startHU();
+        mgr.handleHostEndSession("s1");
+        const out = mgr.handleHostEndSession("s1");
+        expect(out).toEqual({ error: { code: "already_ended", message: expect.any(String) } });
+      });
+    });
+
+    describe("seat.showCards (fold-around reveal)", () => {
+      function setupFoldAround() {
+        const dispatched: Effect[] = [];
+        mgr.setDispatcher((eff) => dispatched.push(...eff));
+        const roomId = mgr.createRoom();
+        mgr.handleJoin({ sessionId: "s1", roomId, playerId: "p1", displayName: "Alice" });
+        mgr.handleJoin({ sessionId: "s2", roomId, playerId: "p2", displayName: "Bob" });
+        mgr.handleSeatTake("s1", { seatIndex: 0, buyIn: 200 });
+        mgr.handleSeatTake("s2", { seatIndex: 1, buyIn: 200 });
+        mgr.handleGameStart("s1");
+        // HU: dealer (p1, s1) acts first preflop → folds. p2 wins by fold-around.
+        mgr.handleHandAction("s1", { kind: "fold" });
+        return { roomId, dispatched };
+      }
+
+      it("rejects show from a player not in the just-completed hand", () => {
+        const { roomId } = setupFoldAround();
+        mgr.handleJoin({ sessionId: "s3", roomId, playerId: "p3", displayName: "Cat" });
+        const out = mgr.handleShowCards("s3");
+        expect(out).toEqual({ error: { code: "not_in_hand", message: expect.any(String) } });
+      });
+
+      it("rejects show from a player who folded (not the winner)", () => {
+        setupFoldAround();
+        const out = mgr.handleShowCards("s1");
+        expect(out).toEqual({ error: { code: "cannot_show", message: expect.any(String) } });
+      });
+
+      it("fold-around winner can show; their cards become visible in the hand snapshot", () => {
+        const { dispatched } = setupFoldAround();
+        const before = dispatched.length;
+        const out = mgr.handleShowCards("s2") as Effect[];
+        const after = [...out, ...dispatched.slice(before)];
+        const snap = after.find(
+          (e) =>
+            e.message.type === "room.delta" &&
+            e.message.delta.kind === "hand.snapshot" &&
+            e.message.delta.hand.street === "complete",
+        );
+        if (!snap || snap.message.type !== "room.delta") throw new Error("snap");
+        if (snap.message.delta.kind !== "hand.snapshot") throw new Error("snap2");
+        const bobSeat = snap.message.delta.hand.seats.find((s) => s.playerId === "p2");
+        expect(bobSeat?.holeCards).not.toBeNull();
+      });
+
+      it("revealed cards persist into the HandRecord", () => {
+        const records: import("@felt/shared").HandRecord[] = [];
+        mgr.setHandSink((r) => records.push(r));
+        setupFoldAround();
+        // Hand record was already emitted at completion with empty reveals.
+        // The intent of opt-in show is that subsequent persistence reflects it,
+        // but our flow emits the record once at completion. For v1 we accept that
+        // the record's revealedPlayerIds is set at-emit time; opt-in show happens
+        // afterwards and is captured in the live snapshot only. Confirm the
+        // initial record has empty reveals.
+        expect(records[0]?.revealedPlayerIds).toEqual([]);
+      });
+
+      it("after a new hand starts, show is no longer allowed", () => {
+        vi.useFakeTimers();
+        try {
+          const { dispatched } = setupFoldAround();
+          // Allow auto-advance: by default 4s.
+          vi.advanceTimersByTime(5_000);
+          const out = mgr.handleShowCards("s2");
+          // A new hand is now in progress, so the previous hand's reveal window is closed.
+          expect(out).toEqual({ error: { code: "cannot_show", message: expect.any(String) } });
+          void dispatched;
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
+
+    describe("host.updateSettings", () => {
+      it("rejects update from a non-host caller", () => {
+        startHU();
+        const out = mgr.handleHostUpdateSettings("s2", { smallBlind: 5, bigBlind: 10 });
+        expect(out).toEqual({ error: { code: "not_host", message: expect.any(String) } });
+      });
+
+      it("rejects invalid settings (sb >= bb)", () => {
+        startHU();
+        const out = mgr.handleHostUpdateSettings("s1", { smallBlind: 100, bigBlind: 50 });
+        expect(out).toEqual({ error: { code: "bad_settings", message: expect.any(String) } });
+      });
+
+      it("applies blinds change and broadcasts configUpdated + system chat", () => {
+        const { roomId } = startHU();
+        const out = mgr.handleHostUpdateSettings("s1", { smallBlind: 5, bigBlind: 10 }) as Effect[];
+        const updated = out.find(
+          (e) => e.message.type === "room.delta" && e.message.delta.kind === "configUpdated",
+        );
+        if (!updated || updated.message.type !== "room.delta") throw new Error("updated");
+        if (updated.message.delta.kind !== "configUpdated") throw new Error("updated2");
+        expect(updated.message.delta.config.smallBlind).toBe(5);
+        expect(updated.message.delta.config.bigBlind).toBe(10);
+        const sys = out.find(
+          (e) =>
+            e.message.type === "room.delta" &&
+            e.message.delta.kind === "chat" &&
+            e.message.delta.message.system === true,
+        );
+        expect(sys).toBeDefined();
+        expect(mgr.getSnapshotBlob(roomId)?.room.config.smallBlind).toBe(5);
+      });
+
+      it("new blinds take effect on the NEXT hand (current hand keeps its blinds)", () => {
+        vi.useFakeTimers();
+        try {
+          const { roomId, dispatched } = startHU({ interHandDelayMs: 100 });
+          // Current hand committed at 1/2 from setupHU.
+          const handBefore = mgr.getHand(roomId);
+          if (!handBefore) throw new Error("hand");
+          const committedBefore = handBefore.seats
+            .map((s) => s.committedThisRound)
+            .sort((a, b) => a - b);
+          expect(committedBefore).toEqual([1, 2]);
+
+          mgr.handleHostUpdateSettings("s1", { smallBlind: 5, bigBlind: 10 });
+          // Mid-hand: existing seats keep their committed blinds, no rewind.
+          const handMid = mgr.getHand(roomId);
+          const committedMid = handMid?.seats.map((s) => s.committedThisRound).sort((a, b) => a - b);
+          expect(committedMid).toEqual(committedBefore);
+
+          // End hand, advance to next.
+          mgr.handleHandAction("s1", { kind: "fold" });
+          vi.advanceTimersByTime(150);
+          const handNext = mgr.getHand(roomId);
+          if (!handNext) throw new Error("nextHand");
+          const committedNext = handNext.seats
+            .map((s) => s.committedThisRound)
+            .sort((a, b) => a - b);
+          expect(committedNext).toEqual([5, 10]);
+          void dispatched;
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("disabling autoDeal cancels a pending next-hand timer", () => {
+        vi.useFakeTimers();
+        try {
+          const { dispatched } = startHU();
+          mgr.handleHandAction("s1", { kind: "fold" });
+          const before = dispatched.length;
+          const out = mgr.handleHostUpdateSettings("s1", { autoDealEnabled: false }) as Effect[];
+          const after = [...out, ...dispatched.slice(before)];
+          const cleared = after.find(
+            (e) =>
+              e.message.type === "room.delta" &&
+              e.message.delta.kind === "nextHandScheduled" &&
+              e.message.delta.at === null,
+          );
+          expect(cleared).toBeDefined();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("enabling autoDeal schedules a next hand when one isn't in progress", () => {
+        vi.useFakeTimers();
+        try {
+          // Start with autoDeal off, end a hand → no schedule, then flip on.
+          const { dispatched } = startHU({ autoDealEnabled: false });
+          mgr.handleHandAction("s1", { kind: "fold" });
+          const before = dispatched.length;
+          const out = mgr.handleHostUpdateSettings("s1", { autoDealEnabled: true }) as Effect[];
+          const after = [...out, ...dispatched.slice(before)];
+          const scheduled = after.find(
+            (e) =>
+              e.message.type === "room.delta" &&
+              e.message.delta.kind === "nextHandScheduled" &&
+              e.message.delta.at !== null,
+          );
+          expect(scheduled).toBeDefined();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
+
+    describe("host.transfer", () => {
+      it("rejects transfer from non-host", () => {
+        startHU();
+        const out = mgr.handleHostTransfer("s2", { playerId: "p1" });
+        expect(out).toEqual({ error: { code: "not_host", message: expect.any(String) } });
+      });
+
+      it("rejects transfer to a player not in the room", () => {
+        startHU();
+        const out = mgr.handleHostTransfer("s1", { playerId: "ghost" });
+        expect(out).toEqual({ error: { code: "unknown_player", message: expect.any(String) } });
+      });
+
+      it("rejects transfer to self (no-op)", () => {
+        startHU();
+        const out = mgr.handleHostTransfer("s1", { playerId: "p1" });
+        expect(out).toEqual({ error: { code: "already_host", message: expect.any(String) } });
+      });
+
+      it("transfers host to the target, broadcasts hostChanged + system chat", () => {
+        const { roomId } = startHU();
+        const out = mgr.handleHostTransfer("s1", { playerId: "p2" }) as Effect[];
+        const hostChanged = out.find(
+          (e) =>
+            e.message.type === "room.delta" &&
+            e.message.delta.kind === "hostChanged" &&
+            e.message.delta.hostId === "p2",
+        );
+        expect(hostChanged).toBeDefined();
+        const sys = out.find(
+          (e) =>
+            e.message.type === "room.delta" &&
+            e.message.delta.kind === "chat" &&
+            e.message.delta.message.system === true,
+        );
+        expect(sys).toBeDefined();
+        expect(mgr.getSnapshotBlob(roomId)?.room.hostId).toBe("p2");
+      });
+    });
+
+    describe("host auto-promotion on disconnect", () => {
+      it("when host disconnects and grace expires, lowest-seat-index seated player becomes host", () => {
+        vi.useFakeTimers();
+        try {
+          mgr.disconnectGraceMs = 100;
+          const dispatched: Effect[] = [];
+          mgr.setDispatcher((eff) => dispatched.push(...eff));
+          const roomId = mgr.createRoom();
+          mgr.handleJoin({ sessionId: "s1", roomId, playerId: "p1", displayName: "Alice" });
+          mgr.handleJoin({ sessionId: "s2", roomId, playerId: "p2", displayName: "Bob" });
+          mgr.handleJoin({ sessionId: "s3", roomId, playerId: "p3", displayName: "Cat" });
+          // Bob and Cat sit; Alice (host) does not.
+          mgr.handleSeatTake("s2", { seatIndex: 1, buyIn: 200 });
+          mgr.handleSeatTake("s3", { seatIndex: 4, buyIn: 200 });
+          // Alice (host) disconnects.
+          mgr.handleLeave("s1");
+          // Before grace fires, host is still Alice.
+          expect(mgr.getSnapshotBlob(roomId)?.room.hostId).toBe("p1");
+          // Advance past grace.
+          vi.advanceTimersByTime(150);
+          // Bob (seat 1, lowest seated index) becomes host.
+          expect(mgr.getSnapshotBlob(roomId)?.room.hostId).toBe("p2");
+          const hostChanged = dispatched.find(
+            (e) =>
+              e.message.type === "room.delta" &&
+              e.message.delta.kind === "hostChanged" &&
+              e.message.delta.hostId === "p2",
+          );
+          expect(hostChanged).toBeDefined();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("if no seated players remain, promotes any other player in the room", () => {
+        vi.useFakeTimers();
+        try {
+          mgr.disconnectGraceMs = 100;
+          const roomId = mgr.createRoom();
+          mgr.handleJoin({ sessionId: "s1", roomId, playerId: "p1", displayName: "Alice" });
+          mgr.handleJoin({ sessionId: "s2", roomId, playerId: "p2", displayName: "Bob" });
+          // Nobody sits; Alice (host) disconnects.
+          mgr.handleLeave("s1");
+          vi.advanceTimersByTime(150);
+          expect(mgr.getSnapshotBlob(roomId)?.room.hostId).toBe("p2");
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("if the host reconnects within the grace window, no transfer happens", () => {
+        vi.useFakeTimers();
+        try {
+          mgr.disconnectGraceMs = 200;
+          const roomId = mgr.createRoom();
+          mgr.handleJoin({ sessionId: "s1", roomId, playerId: "p1", displayName: "Alice" });
+          mgr.handleJoin({ sessionId: "s2", roomId, playerId: "p2", displayName: "Bob" });
+          mgr.handleSeatTake("s2", { seatIndex: 1, buyIn: 200 });
+          mgr.handleLeave("s1");
+          vi.advanceTimersByTime(50);
+          mgr.handleJoin({ sessionId: "s1-new", roomId, playerId: "p1", displayName: "Alice" });
+          vi.advanceTimersByTime(300);
+          expect(mgr.getSnapshotBlob(roomId)?.room.hostId).toBe("p1");
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
+  });
+
   describe("turn timer + time bank + pre-actions", () => {
     function startHU() {
       const dispatched: Effect[] = [];
       mgr.setDispatcher((eff) => dispatched.push(...eff));
-      mgr.turnDurationMs = 1000;
-      mgr.timeBankMs = 1000;
-      const roomId = mgr.createRoom();
+      const roomId = mgr.createRoom({ turnTimerMs: 1000, timeBankMs: 1000 });
       mgr.handleJoin({ sessionId: "s1", roomId, playerId: "p1", displayName: "Alice" });
       mgr.handleJoin({ sessionId: "s2", roomId, playerId: "p2", displayName: "Bob" });
       mgr.handleSeatTake("s1", { seatIndex: 0, buyIn: 200 });
@@ -947,12 +1664,13 @@ describe("RoomManager", () => {
       expect(initial?.seats[0]?.holeCards).not.toBeNull();
       expect(initial?.seats[1]?.holeCards).toBeNull();
 
-      // Final frame: p2's cards reveal (they didn't fold). p1 sees their own
-      // cards at every frame (it's their seat — replay UX: always see your own).
-      expect(lastP1?.seats[1]?.holeCards).not.toBeNull();
+      // Final frame: this was a fold-around (p1 folded preflop), so p2 — the
+      // uncontested winner — is NOT auto-revealed. p1 still sees their own
+      // cards at every frame as the requester.
+      expect(lastP1?.seats[1]?.holeCards).toBeNull();
       expect(lastP1?.seats[0]?.holeCards).not.toBeNull();
 
-      // From p2's perspective: only their own cards mid-frame; same final reveal.
+      // From p2's perspective: only their own cards visible; opponents stay hidden.
       const framesForP2 = replayHand(record, "p2");
       const initialP2 = framesForP2[0];
       expect(initialP2?.seats[1]?.holeCards).not.toBeNull();

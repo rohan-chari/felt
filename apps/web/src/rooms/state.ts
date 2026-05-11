@@ -30,6 +30,10 @@ export type RoomViewState = {
   buyIns: BuyInLedgerEntry[];
   /** Active replay frames for an opened past hand, or null when no replay is open. */
   replay: { handId: string; frames: HandView[] } | null;
+  /** Host has paused the room — current hand finishes, no new hand auto-starts until resume. */
+  paused: boolean;
+  /** Host has ended the session — room is locked. */
+  ended: boolean;
   /** Fatal error during initial join — replaces the room view. */
   error: string | null;
   /** Transient toast — error (red) or info (green). seq lets the toast component re-trigger when fired twice. */
@@ -56,6 +60,8 @@ export const initialRoomViewState: RoomViewState = {
   handHistory: [],
   buyIns: [],
   replay: null,
+  paused: false,
+  ended: false,
   error: null,
   transientError: null,
 };
@@ -113,6 +119,8 @@ export function applyServerMessage(state: RoomViewState, msg: ServerMessage): Ro
         handHistory: state.handHistory, // preserve across snapshots
         buyIns: msg.snapshot.buyIns,
         replay: state.replay, // preserve across snapshots
+        paused: msg.snapshot.paused,
+        ended: msg.snapshot.ended,
         error: null,
         transientError: state.transientError,
       };
@@ -167,11 +175,35 @@ export function applyServerMessage(state: RoomViewState, msg: ServerMessage): Ro
         case "nextHandScheduled":
           return { ...state, nextHandAt: delta.at };
         case "buyInsUpdated": {
+          const existing = state.buyIns.find((e) => e.playerId === delta.playerId);
           const without = state.buyIns.filter((e) => e.playerId !== delta.playerId);
-          const next = [...without, { playerId: delta.playerId, total: delta.total }];
+          const next = [
+            ...without,
+            { playerId: delta.playerId, total: delta.total, cashedOut: existing?.cashedOut ?? 0 },
+          ];
           next.sort((a, b) => a.playerId.localeCompare(b.playerId));
           return { ...state, buyIns: next };
         }
+        case "cashedOutUpdated": {
+          const existing = state.buyIns.find((e) => e.playerId === delta.playerId);
+          const without = state.buyIns.filter((e) => e.playerId !== delta.playerId);
+          const next = [
+            ...without,
+            {
+              playerId: delta.playerId,
+              total: existing?.total ?? 0,
+              cashedOut: delta.cashedOut,
+            },
+          ];
+          next.sort((a, b) => a.playerId.localeCompare(b.playerId));
+          return { ...state, buyIns: next };
+        }
+        case "pausedChanged":
+          return { ...state, paused: delta.paused };
+        case "sessionEnded":
+          return { ...state, ended: true };
+        case "configUpdated":
+          return { ...state, config: delta.config };
       }
       return state;
     }
@@ -182,6 +214,10 @@ export function applyServerMessage(state: RoomViewState, msg: ServerMessage): Ro
     case "hand.replay":
       return { ...state, replay: { handId: msg.handId, frames: msg.frames } };
     case "error":
+      // Kick is a terminal exit: replace the room UI with a "you were kicked" view.
+      if (msg.code === "kicked") {
+        return { ...state, status: "error", error: msg.message };
+      }
       // Pre-join (haven't received a snapshot yet): fatal — shows the prompt with an error.
       // Post-join: transient — surfaced as a toast.
       if (state.status !== "joined") {

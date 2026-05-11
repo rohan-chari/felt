@@ -1,22 +1,26 @@
 import { randomUUID } from "node:crypto";
-import type { ClientMessage, HandRecord, PlayerId } from "@felt/shared";
+import type { ClientMessage, HandRecord, PlayerId, RoomConfig } from "@felt/shared";
 import uWS, { type HttpResponse, type us_listen_socket, type WebSocket } from "uWebSockets.js";
 import { MemoryPersistence } from "./persistence/memory.js";
 import type { Persistence } from "./persistence/types.js";
 import { type Effect, RoomManager, type SessionId } from "./rooms/manager.js";
 import { replayHand } from "./rooms/hand.js";
+import { validateRoomSettings } from "./rooms/settings.js";
 
 /**
  * Strip hole cards before sending a HandRecord to a specific player. The
  * requester always sees their own cards; opponents' cards are revealed only
- * for seats that didn't fold (i.e., that reached showdown).
+ * for seats listed in revealedPlayerIds (showdown participants + fold-around
+ * winners who opted in via seat.showCards).
  */
 function filterHoleCardsFor(record: HandRecord, requesterId: PlayerId): HandRecord {
+  const revealed = new Set(record.revealedPlayerIds);
   return {
     ...record,
     seats: record.seats.map((s) => ({
       ...s,
-      holeCards: s.playerId === requesterId || !s.isFolded ? s.holeCards : null,
+      holeCards:
+        s.playerId === requesterId || revealed.has(s.playerId) ? s.holeCards : null,
     })),
   };
 }
@@ -41,6 +45,47 @@ type CreateServerOptions = {
 };
 
 const DEFAULT_SNAPSHOT_INTERVAL_MS = 10_000;
+const MAX_BODY_BYTES = 16 * 1024;
+
+/**
+ * Read a JSON body from a µWS response stream. Resolves with the parsed value
+ * (or `null` for an empty body). Rejects on malformed JSON, oversized payload,
+ * or a connection abort. The caller is expected to handle the `null` case
+ * (treat as "no settings supplied — use defaults").
+ */
+function readJsonBody(res: HttpResponse): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let settled = false;
+    res.onData((chunk, isLast) => {
+      if (settled) return;
+      const buf = Buffer.from(chunk);
+      total += buf.byteLength;
+      if (total > MAX_BODY_BYTES) {
+        settled = true;
+        reject(new Error("body too large"));
+        return;
+      }
+      chunks.push(Buffer.from(buf));
+      if (!isLast) return;
+      const raw = Buffer.concat(chunks).toString("utf8").trim();
+      if (raw.length === 0) {
+        settled = true;
+        resolve(null);
+        return;
+      }
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        settled = true;
+        resolve(parsed);
+      } catch {
+        settled = true;
+        reject(new Error("malformed JSON"));
+      }
+    });
+  });
+}
 
 export async function createServer(opts: CreateServerOptions): Promise<ServerHandle> {
   const persistence = opts.persistence ?? new MemoryPersistence();
@@ -98,13 +143,40 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   });
 
   app.post("/rooms", (res) => {
-    res.onAborted(() => {});
-    const roomId = manager.createRoom();
-    res.cork(() => {
-      writeCors(res);
-      res.writeHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ roomId }));
+    let aborted = false;
+    res.onAborted(() => {
+      aborted = true;
     });
+    readJsonBody(res)
+      .then((body) => {
+        if (aborted) return;
+        const validation = validateRoomSettings(body);
+        if (!validation.ok) {
+          res.cork(() => {
+            res.writeStatus("400 Bad Request");
+            writeCors(res);
+            res.writeHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ error: validation.error }));
+          });
+          return;
+        }
+        const roomId = manager.createRoom(validation.settings);
+        res.cork(() => {
+          writeCors(res);
+          res.writeHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ roomId }));
+        });
+      })
+      .catch((err: unknown) => {
+        if (aborted) return;
+        const message = err instanceof Error ? err.message : "invalid body";
+        res.cork(() => {
+          res.writeStatus("400 Bad Request");
+          writeCors(res);
+          res.writeHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ error: message }));
+        });
+      });
   });
 
   app.get("/health", (res) => {
@@ -224,6 +296,42 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
         case "hand.cancelPreAction":
           handleResult(manager.handleCancelPreAction(sessionId));
           return;
+        case "seat.showCards":
+          handleResult(manager.handleShowCards(sessionId));
+          return;
+        case "host.pause":
+          handleResult(manager.handleHostPause(sessionId));
+          return;
+        case "host.resume":
+          handleResult(manager.handleHostResume(sessionId));
+          return;
+        case "host.endSession":
+          handleResult(manager.handleHostEndSession(sessionId));
+          return;
+        case "host.kick": {
+          if (typeof parsed.playerId !== "string") {
+            sendError(sessionId, "bad_message", "host.kick missing playerId");
+            return;
+          }
+          handleResult(manager.handleHostKick(sessionId, { playerId: parsed.playerId }));
+          return;
+        }
+        case "host.updateSettings": {
+          if (!parsed.settings || typeof parsed.settings !== "object") {
+            sendError(sessionId, "bad_message", "host.updateSettings missing settings");
+            return;
+          }
+          handleResult(manager.handleHostUpdateSettings(sessionId, parsed.settings));
+          return;
+        }
+        case "host.transfer": {
+          if (typeof parsed.playerId !== "string") {
+            sendError(sessionId, "bad_message", "host.transfer missing playerId");
+            return;
+          }
+          handleResult(manager.handleHostTransfer(sessionId, { playerId: parsed.playerId }));
+          return;
+        }
         case "hand.history": {
           const info = manager.getSessionInfo(sessionId);
           if (!info) {

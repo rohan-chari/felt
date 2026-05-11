@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getOrCreatePlayerId } from "./identity";
+import { getOrCreatePlayerId, resetPlayerId } from "./identity";
 
 function memoryStorage(): Storage {
   const map = new Map<string, string>();
@@ -36,7 +36,7 @@ describe("getOrCreatePlayerId", () => {
     expect(a).toBe(b);
   });
 
-  it("defaults to sessionStorage so each browser tab is a distinct player", () => {
+  it("defaults to localStorage so identity survives tab close and browser restart", () => {
     const session = memoryStorage();
     const local = memoryStorage();
     vi.stubGlobal("sessionStorage", session);
@@ -44,7 +44,16 @@ describe("getOrCreatePlayerId", () => {
 
     const id = getOrCreatePlayerId();
 
-    expect(session.getItem("felt.playerId")).toBe(id);
-    expect(local.getItem("felt.playerId")).toBeNull();
+    expect(local.getItem("felt.playerId")).toBe(id);
+    expect(session.getItem("felt.playerId")).toBeNull();
+  });
+
+  it("resetPlayerId clears the stored id so the next call creates a fresh one", () => {
+    const s = memoryStorage();
+    const first = getOrCreatePlayerId(s);
+    resetPlayerId(s);
+    const second = getOrCreatePlayerId(s);
+    expect(second).not.toBe(first);
+    expect(s.getItem("felt.playerId")).toBe(second);
   });
 });

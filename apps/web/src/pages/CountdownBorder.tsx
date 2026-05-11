@@ -69,7 +69,7 @@ export function CountdownBorder({ deadline }: Props) {
             ry={rx}
             pathLength={1}
             fill="none"
-            stroke={lowTime ? "var(--crimson)" : "var(--accent)"}
+            stroke={lowTime ? "var(--bad)" : "var(--accent)"}
             strokeWidth={stroke}
             strokeDasharray="1"
             strokeDashoffset={1 - fraction}

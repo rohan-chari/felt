@@ -21,11 +21,13 @@ function buildRows(props: LedgerPanelProps): LedgerRow[] {
   for (const seat of props.seats) {
     if (seat.kind === "taken") stackByPlayer.set(seat.playerId, seat.stack);
   }
-  const buyInByPlayer = new Map<string, number>();
-  for (const entry of props.buyIns) buyInByPlayer.set(entry.playerId, entry.total);
+  const byPlayer = new Map<string, { total: number; cashedOut: number }>();
+  for (const entry of props.buyIns) {
+    byPlayer.set(entry.playerId, { total: entry.total, cashedOut: entry.cashedOut });
+  }
 
   const rows: LedgerRow[] = [];
-  // Anyone with a recorded buy-in shows up, even if they later stood up.
+  // Anyone with a recorded buy-in shows up, even if they later stood up or were kicked.
   const playerIds = new Set<string>();
   for (const entry of props.buyIns) playerIds.add(entry.playerId);
   for (const seat of props.seats) {
@@ -34,14 +36,16 @@ function buildRows(props: LedgerPanelProps): LedgerRow[] {
 
   for (const playerId of playerIds) {
     const player = props.players.find((p) => p.id === playerId);
-    const buyIn = buyInByPlayer.get(playerId) ?? 0;
-    const stack = stackByPlayer.get(playerId) ?? 0;
+    const totals = byPlayer.get(playerId) ?? { total: 0, cashedOut: 0 };
+    const seatedStack = stackByPlayer.get(playerId) ?? 0;
+    // Total chips on hand = current seat stack + everything previously cashed out.
+    const stack = seatedStack + totals.cashedOut;
     rows.push({
       playerId,
       displayName: player?.displayName ?? "(left)",
-      buyIn,
+      buyIn: totals.total,
       stack,
-      net: stack - buyIn,
+      net: stack - totals.total,
     });
   }
   rows.sort((a, b) => b.net - a.net);

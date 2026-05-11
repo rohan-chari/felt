@@ -106,7 +106,11 @@ export class PostgresPersistence implements Persistence {
         [roomId],
       ),
     );
-    return result.rows.map((r) => r.record);
+    // Backfill revealedPlayerIds for records persisted before Phase 10e.
+    return result.rows.map((r) => ({
+      ...r.record,
+      revealedPlayerIds: r.record.revealedPlayerIds ?? [],
+    }));
   }
 
   async close(): Promise<void> {

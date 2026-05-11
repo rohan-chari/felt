@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   applyAction as engineApplyAction,
+  forceFold as engineForceFold,
   type HandState,
   markSittingOut as engineMarkSittingOut,
   startHand,
@@ -11,6 +12,7 @@ import type {
   HandRecord,
   PlayerId,
   PreAction,
+  RoomConfig,
   RoomDelta,
   RoomId,
   ServerMessage,
@@ -24,6 +26,7 @@ import {
   type RoomState,
   toSnapshot as roomToSnapshot,
 } from "./room.js";
+import { validateRoomSettings } from "./settings.js";
 
 export type SessionId = string;
 
@@ -48,9 +51,6 @@ type IntentError = { error: { code: string; message: string } };
 
 const ROOM_ID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_ID_LENGTH = 6;
-const INTER_HAND_DELAY_MS = 4000;
-const DEFAULT_TURN_MS = 30_000;
-const DEFAULT_TIME_BANK_MS = 30_000;
 const DEFAULT_DISCONNECT_GRACE_MS = 60_000;
 
 function generateRoomId(): RoomId {
@@ -90,11 +90,7 @@ function nextDealerAfter(room: RoomState, currentSlot: number): number {
 }
 
 export class RoomManager {
-  /** Per-turn auto-act timeout (ms). Override for tests. */
-  turnDurationMs = DEFAULT_TURN_MS;
-  /** Extra time granted by a single time-bank use (ms). Override for tests. */
-  timeBankMs = DEFAULT_TIME_BANK_MS;
-  /** How long to hold a disconnected player's seat before evicting them. Override for tests. */
+  /** How long to hold a disconnected player's seat before evicting them. Server-wide, not per-room. */
   disconnectGraceMs = DEFAULT_DISCONNECT_GRACE_MS;
 
   private rooms = new Map<RoomId, RoomState>();
@@ -107,6 +103,8 @@ export class RoomManager {
   private preActions = new Map<RoomId, Map<PlayerId, PreAction>>();
   /** Pending eviction timers per room → playerId. Cancelled on rejoin. */
   private evictionTimers = new Map<RoomId, Map<PlayerId, ReturnType<typeof setTimeout>>>();
+  /** Players whose hole cards are revealed for the current/just-finished hand. Cleared at hand start. */
+  private currentHandReveals = new Map<RoomId, Set<PlayerId>>();
   private dispatcher: ((effects: Effect[]) => void) | null = null;
   private handSink: ((record: HandRecord) => void) | null = null;
 
@@ -124,10 +122,10 @@ export class RoomManager {
     if (this.dispatcher && effects.length > 0) this.dispatcher(effects);
   }
 
-  createRoom(): RoomId {
+  createRoom(settings?: Partial<RoomConfig>): RoomId {
     let id = generateRoomId();
     while (this.rooms.has(id)) id = generateRoomId();
-    this.rooms.set(id, createRoom(id));
+    this.rooms.set(id, createRoom(id, settings));
     return id;
   }
 
@@ -146,7 +144,13 @@ export class RoomManager {
   private toSnapshotWithHand(room: RoomState) {
     const snap = roomToSnapshot(room);
     const hand = this.hands.get(room.roomId);
-    if (hand) snap.hand = toHandView(hand, this.currentTurnDeadlines.get(room.roomId) ?? null);
+    if (hand)
+      snap.hand = toHandView(
+        hand,
+        this.currentTurnDeadlines.get(room.roomId) ?? null,
+        undefined,
+        this.currentHandReveals.get(room.roomId),
+      );
     return snap;
   }
 
@@ -183,7 +187,12 @@ export class RoomManager {
   private broadcastHandSnapshot(roomId: RoomId, hand: HandState): Effect[] {
     return this.broadcastDelta(roomId, {
       kind: "hand.snapshot",
-      hand: toHandView(hand, this.currentTurnDeadlines.get(roomId) ?? null),
+      hand: toHandView(
+        hand,
+        this.currentTurnDeadlines.get(roomId) ?? null,
+        undefined,
+        this.currentHandReveals.get(roomId),
+      ),
     });
   }
 
@@ -199,11 +208,14 @@ export class RoomManager {
   private armTurnTimer(roomId: RoomId, hand: HandState): void {
     this.clearTurnTimer(roomId);
     if (hand.street === "complete" || hand.currentSeatIdx === null) return;
-    const deadline = Date.now() + this.turnDurationMs;
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+    const turnTimerMs = room.config.turnTimerMs;
+    const deadline = Date.now() + turnTimerMs;
     this.currentTurnDeadlines.set(roomId, deadline);
     const timer = setTimeout(() => {
       this.fireTurnExpiry(roomId);
-    }, this.turnDurationMs);
+    }, turnTimerMs);
     this.turnTimers.set(roomId, timer);
   }
 
@@ -248,21 +260,63 @@ export class RoomManager {
 
   /** Drop a player from the room: vacate any seat they hold, remove from player list. */
   private evictPlayer(roomId: RoomId, playerId: PlayerId): Effect[] {
-    let room = this.rooms.get(roomId);
+    const room = this.rooms.get(roomId);
     if (!room) return [];
     // If a session was reattached for this player while the timer was pending, abort.
     if (this.playerHasOtherSessions(roomId, playerId)) return [];
     const effects: Effect[] = [];
+    effects.push(...this.vacateSeat(roomId, playerId));
+    const r2 = this.rooms.get(roomId);
+    if (!r2) return effects;
+    let r3 = applyEvent(r2, { kind: "playerLeft", playerId });
+    this.rooms.set(roomId, r3);
+    effects.push(...this.broadcastDelta(roomId, { kind: "playerLeft", playerId }));
+
+    // If the evicted player was the host, auto-promote a successor so the room is
+    // never host-less. Preference: lowest-seat-index seated player, else any
+    // other room member.
+    if (r3.hostId === playerId) {
+      const nextHost = this.pickNextHost(r3, playerId);
+      r3 = applyEvent(r3, { kind: "hostChanged", hostId: nextHost });
+      this.rooms.set(roomId, r3);
+      effects.push(...this.broadcastDelta(roomId, { kind: "hostChanged", hostId: nextHost }));
+      if (nextHost) {
+        const newName = r3.players.get(nextHost)?.displayName ?? "a player";
+        effects.push(...this.emitSystemChat(roomId, `${newName} is now the host.`));
+      }
+    }
+    return effects;
+  }
+
+  /**
+   * Remove a player from their seat, recording the seat's stack as a cash-out
+   * in the ledger. Safe to call when the player isn't seated (no-op). Used by
+   * voluntary stand-up, disconnect eviction, and host kick.
+   */
+  private vacateSeat(roomId: RoomId, playerId: PlayerId): Effect[] {
+    let room = this.rooms.get(roomId);
+    if (!room) return [];
     const slot = findSeatOf(room, playerId);
-    if (slot !== -1) {
-      room = applyEvent(room, { kind: "seatLeft", seatIndex: slot });
+    if (slot === -1) return [];
+    const seat = room.seats[slot];
+    if (!seat || seat.kind !== "taken") return [];
+    const effects: Effect[] = [];
+    if (seat.stack > 0) {
+      room = applyEvent(room, {
+        kind: "cashedOutIncreased",
+        playerId,
+        amount: seat.stack,
+      });
+      const total = room.cashedOuts.get(playerId) ?? seat.stack;
       effects.push(
-        ...this.broadcastDelta(roomId, { kind: "seatLeft", seatIndex: slot, playerId }),
+        ...this.broadcastDelta(roomId, { kind: "cashedOutUpdated", playerId, cashedOut: total }),
       );
     }
-    room = applyEvent(room, { kind: "playerLeft", playerId });
-    effects.push(...this.broadcastDelta(roomId, { kind: "playerLeft", playerId }));
+    room = applyEvent(room, { kind: "seatLeft", seatIndex: slot });
     this.rooms.set(roomId, room);
+    effects.push(
+      ...this.broadcastDelta(roomId, { kind: "seatLeft", seatIndex: slot, playerId }),
+    );
     return effects;
   }
 
@@ -345,6 +399,7 @@ export class RoomManager {
     effects.push(...this.broadcastHandSnapshot(roomId, result.state));
 
     if (result.state.street === "complete") {
+      this.finalizeHandReveals(roomId, result.state);
       this.emitHandRecord(roomId, result.state);
       effects.push(...this.applyHandResultToRoom(roomId, result.state));
       effects.push(...this.scheduleNextHand(roomId));
@@ -393,6 +448,20 @@ export class RoomManager {
   }
 
   /** After a hand completes, sync each seated player's stack from the engine result back to room.seats. */
+  /**
+   * Populate the reveal set for a just-completed hand. Real showdowns (≥2
+   * non-folded) auto-reveal every non-folded seat. Fold-arounds leave the set
+   * empty; the winner may later opt in via seat.showCards.
+   */
+  private finalizeHandReveals(roomId: RoomId, hand: HandState): void {
+    const nonFolded = hand.seats.filter((s) => !s.isFolded);
+    const reveals = new Set<PlayerId>();
+    if (nonFolded.length > 1) {
+      for (const s of nonFolded) reveals.add(s.playerId);
+    }
+    this.currentHandReveals.set(roomId, reveals);
+  }
+
   private applyHandResultToRoom(roomId: RoomId, hand: HandState): Effect[] {
     let room = this.rooms.get(roomId);
     if (!room) return [];
@@ -439,13 +508,16 @@ export class RoomManager {
     }
 
     const eligible = eligibleSeatedSlots(room).length;
-    if (eligible < 2) {
+    // Either not enough players, host disabled auto-deal, room is paused, or session
+    // is ended — broadcast that no next-hand is scheduled so clients hide the countdown.
+    if (eligible < 2 || !room.config.autoDealEnabled || room.paused || room.ended) {
       const updated = applyEvent(room, { kind: "nextHandScheduled", at: null });
       this.rooms.set(roomId, updated);
       return this.broadcastDelta(roomId, { kind: "nextHandScheduled", at: null });
     }
 
-    const at = Date.now() + INTER_HAND_DELAY_MS;
+    const delay = room.config.interHandDelayMs;
+    const at = Date.now() + delay;
     const updated = applyEvent(room, { kind: "nextHandScheduled", at });
     this.rooms.set(roomId, updated);
 
@@ -453,7 +525,7 @@ export class RoomManager {
       this.nextHandTimers.delete(roomId);
       const effects = this.startNextHand(roomId);
       this.dispatchAsync(effects);
-    }, INTER_HAND_DELAY_MS);
+    }, delay);
     this.nextHandTimers.set(roomId, timer);
 
     return this.broadcastDelta(roomId, { kind: "nextHandScheduled", at });
@@ -490,6 +562,7 @@ export class RoomManager {
     const { state: hand } = startHand(startOpts);
     this.hands.set(roomId, hand);
     this.clearPreActions(roomId);
+    this.currentHandReveals.delete(roomId);
     this.armTurnTimer(roomId, hand);
 
     // Move dealer marker forward for the NEXT hand.
@@ -604,6 +677,7 @@ export class RoomManager {
           }
           effects.push(...this.broadcastHandSnapshot(info.roomId, result.state));
           if (result.state.street === "complete") {
+            this.finalizeHandReveals(info.roomId, result.state);
             this.emitHandRecord(info.roomId, result.state);
             effects.push(...this.applyHandResultToRoom(info.roomId, result.state));
             effects.push(...this.scheduleNextHand(info.roomId));
@@ -648,6 +722,9 @@ export class RoomManager {
     if (!info) return { error: { code: "no_session", message: "Session has not joined a room" } };
     const room = this.rooms.get(info.roomId);
     if (!room) return { error: { code: "room_not_found", message: "Room no longer exists" } };
+    if (room.ended) {
+      return { error: { code: "session_ended", message: "Session has ended" } };
+    }
 
     const result = applyIntent(room, {
       kind: "seatTake",
@@ -677,9 +754,14 @@ export class RoomManager {
   }
 
   handleSeatLeave(sessionId: SessionId): Effect[] | IntentError {
-    return this.dispatchIntent(sessionId, (state, info) =>
-      applyIntent(state, { kind: "seatLeave", playerId: info.playerId }),
-    );
+    const info = this.sessions.get(sessionId);
+    if (!info) return { error: { code: "no_session", message: "Session has not joined a room" } };
+    const room = this.rooms.get(info.roomId);
+    if (!room) return { error: { code: "room_not_found", message: "Room no longer exists" } };
+    if (findSeatOf(room, info.playerId) === -1) {
+      return { error: { code: "not_seated", message: "You are not seated" } };
+    }
+    return this.vacateSeat(info.roomId, info.playerId);
   }
 
   handleSeatRebuy(
@@ -769,6 +851,7 @@ export class RoomManager {
     const { state: hand } = startHand(startOpts);
     this.hands.set(info.roomId, hand);
     this.clearPreActions(info.roomId);
+    this.currentHandReveals.delete(info.roomId);
     this.armTurnTimer(info.roomId, hand);
 
     // Move dealer marker forward for the NEXT hand.
@@ -837,9 +920,11 @@ export class RoomManager {
     // Mark used (mutate engine state — manager-owned bookkeeping field).
     seat.timeBankUsed = true;
     // Cancel current timer; arm a longer one. Total = remaining + timeBankMs.
+    const room = this.rooms.get(info.roomId);
+    const timeBankMs = room?.config.timeBankMs ?? 30_000;
     const oldDeadline = this.currentTurnDeadlines.get(info.roomId) ?? Date.now();
     const remaining = Math.max(0, oldDeadline - Date.now());
-    const newDeadline = Date.now() + remaining + this.timeBankMs;
+    const newDeadline = Date.now() + remaining + timeBankMs;
     const existing = this.turnTimers.get(info.roomId);
     if (existing) clearTimeout(existing);
     this.currentTurnDeadlines.set(info.roomId, newDeadline);
@@ -882,6 +967,327 @@ export class RoomManager {
     return [];
   }
 
+  /**
+   * The fold-around winner of the just-completed hand opts to reveal their cards.
+   * Only valid while the hand is still in the "complete" inter-hand window — once
+   * the next hand starts, the reveal window closes. For v1, showOneShowBoth is
+   * implicitly true: showing always reveals both cards.
+   */
+  handleShowCards(sessionId: SessionId): Effect[] | IntentError {
+    const info = this.sessions.get(sessionId);
+    if (!info) return { error: { code: "no_session", message: "Session has not joined a room" } };
+    const hand = this.hands.get(info.roomId);
+    if (!hand || hand.street !== "complete") {
+      return { error: { code: "cannot_show", message: "No completed hand to show for" } };
+    }
+    const mySeat = hand.seats.find((s) => s.playerId === info.playerId);
+    if (!mySeat) {
+      return { error: { code: "not_in_hand", message: "You weren't in this hand" } };
+    }
+    if (mySeat.isFolded) {
+      return { error: { code: "cannot_show", message: "Folded hands cannot reveal" } };
+    }
+    const reveals = this.currentHandReveals.get(info.roomId) ?? new Set<PlayerId>();
+    if (reveals.has(info.playerId)) {
+      // Already revealed (auto, via multi-seat showdown, or via a prior show).
+      return [];
+    }
+    reveals.add(info.playerId);
+    this.currentHandReveals.set(info.roomId, reveals);
+    return this.broadcastHandSnapshot(info.roomId, hand);
+  }
+
+  // ---------- Host actions (Phase 10) ----------
+
+  /** Emit a server-authored chat entry; appears in the chat panel with a system style. */
+  private emitSystemChat(roomId: RoomId, text: string): Effect[] {
+    const room = this.rooms.get(roomId);
+    if (!room) return [];
+    const message = {
+      id: randomUUID(),
+      playerId: "system" as PlayerId,
+      displayName: "System",
+      text,
+      ts: Date.now(),
+      system: true,
+    };
+    const updated = applyEvent(room, { kind: "chatMessage", message });
+    this.rooms.set(roomId, updated);
+    return this.broadcastDelta(roomId, { kind: "chat", message });
+  }
+
+  private requireHost(sessionId: SessionId): { room: RoomState; roomId: RoomId } | IntentError {
+    const info = this.sessions.get(sessionId);
+    if (!info) return { error: { code: "no_session", message: "Session has not joined a room" } };
+    const room = this.rooms.get(info.roomId);
+    if (!room) return { error: { code: "room_not_found", message: "Room no longer exists" } };
+    if (room.hostId !== info.playerId) {
+      return { error: { code: "not_host", message: "Only the host can do that" } };
+    }
+    return { room, roomId: info.roomId };
+  }
+
+  handleHostPause(sessionId: SessionId): Effect[] | IntentError {
+    const auth = this.requireHost(sessionId);
+    if ("error" in auth) return auth;
+    const { room, roomId } = auth;
+    if (room.paused) return { error: { code: "already_paused", message: "Room is already paused" } };
+
+    let updated = applyEvent(room, { kind: "pausedChanged", paused: true });
+    this.rooms.set(roomId, updated);
+    const effects: Effect[] = this.broadcastDelta(roomId, { kind: "pausedChanged", paused: true });
+
+    // Cancel any pending next-hand timer; broadcast the change so clients hide the countdown.
+    const existing = this.nextHandTimers.get(roomId);
+    if (existing) {
+      clearTimeout(existing);
+      this.nextHandTimers.delete(roomId);
+    }
+    if (updated.nextHandAt !== null) {
+      updated = applyEvent(updated, { kind: "nextHandScheduled", at: null });
+      this.rooms.set(roomId, updated);
+      effects.push(...this.broadcastDelta(roomId, { kind: "nextHandScheduled", at: null }));
+    }
+    effects.push(...this.emitSystemChat(roomId, "Host paused the room."));
+    return effects;
+  }
+
+  handleHostKick(
+    sessionId: SessionId,
+    args: { playerId: PlayerId },
+  ): Effect[] | IntentError {
+    const auth = this.requireHost(sessionId);
+    if ("error" in auth) return auth;
+    const { room, roomId } = auth;
+    const target = args.playerId;
+    if (!room.players.has(target)) {
+      return { error: { code: "unknown_player", message: "That player is not in the room" } };
+    }
+    if (target === room.hostId) {
+      return {
+        error: {
+          code: "cannot_kick_host",
+          message: "Transfer host before kicking yourself",
+        },
+      };
+    }
+
+    const effects: Effect[] = [];
+
+    // If they're mid-hand, fold their seat first so the hand can advance.
+    const hand = this.hands.get(roomId);
+    if (hand && hand.street !== "complete") {
+      const seatIdx = hand.seats.findIndex((s) => s.playerId === target);
+      if (seatIdx !== -1 && !hand.seats[seatIdx]?.isFolded) {
+        const result = engineForceFold(hand, seatIdx);
+        if (result.ok) {
+          this.hands.set(roomId, result.state);
+          if (result.state.street === "complete") {
+            this.clearTurnTimer(roomId);
+            this.clearPreActions(roomId);
+          } else {
+            this.armTurnTimer(roomId, result.state);
+          }
+          effects.push(...this.broadcastHandSnapshot(roomId, result.state));
+          if (result.state.street === "complete") {
+            this.emitHandRecord(roomId, result.state);
+            effects.push(...this.applyHandResultToRoom(roomId, result.state));
+            effects.push(...this.scheduleNextHand(roomId));
+          }
+        }
+      }
+    }
+
+    // Look up the kicked player's display name (for the system chat) and active sessions
+    // (to deliver a "kicked" notice and remove their session→room mapping).
+    const kickedName = room.players.get(target)?.displayName ?? "Someone";
+    const hostName = room.players.get(room.hostId ?? "")?.displayName ?? "Host";
+    const targetSessions: SessionId[] = [];
+    for (const [sid, info] of this.sessions.entries()) {
+      if (info.roomId === roomId && info.playerId === target) targetSessions.push(sid);
+    }
+    for (const sid of targetSessions) {
+      effects.push({
+        sessionId: sid,
+        message: { type: "error", code: "kicked", message: `You were kicked by ${hostName}.` },
+      });
+    }
+
+    effects.push(...this.vacateSeat(roomId, target));
+    // Also remove from the room's player list — kick is a full removal.
+    const r2 = this.rooms.get(roomId);
+    if (r2) {
+      const r3 = applyEvent(r2, { kind: "playerLeft", playerId: target });
+      this.rooms.set(roomId, r3);
+      effects.push(...this.broadcastDelta(roomId, { kind: "playerLeft", playerId: target }));
+    }
+    // Cancel any pending eviction timer for them (defensive — they may have just disconnected).
+    const evictMap = this.evictionTimers.get(roomId);
+    const pendingEvict = evictMap?.get(target);
+    if (pendingEvict) {
+      clearTimeout(pendingEvict);
+      evictMap?.delete(target);
+    }
+    // Drop their sessions so future client messages from them fail cleanly.
+    for (const sid of targetSessions) this.sessions.delete(sid);
+
+    effects.push(...this.emitSystemChat(roomId, `${hostName} kicked ${kickedName}.`));
+    return effects;
+  }
+
+  handleHostResume(sessionId: SessionId): Effect[] | IntentError {
+    const auth = this.requireHost(sessionId);
+    if ("error" in auth) return auth;
+    const { room, roomId } = auth;
+    if (!room.paused) return { error: { code: "not_paused", message: "Room is not paused" } };
+
+    const updated = applyEvent(room, { kind: "pausedChanged", paused: false });
+    this.rooms.set(roomId, updated);
+    const effects: Effect[] = this.broadcastDelta(roomId, { kind: "pausedChanged", paused: false });
+    effects.push(...this.emitSystemChat(roomId, "Host resumed the room."));
+
+    // If a hand isn't currently in progress and the game has started, schedule the next one.
+    const hand = this.hands.get(roomId);
+    const handInProgress = hand && hand.street !== "complete";
+    if (updated.gameStarted && !handInProgress) {
+      effects.push(...this.scheduleNextHand(roomId));
+    }
+    return effects;
+  }
+
+  handleHostUpdateSettings(
+    sessionId: SessionId,
+    settings: Partial<RoomConfig>,
+  ): Effect[] | IntentError {
+    const auth = this.requireHost(sessionId);
+    if ("error" in auth) return auth;
+    const { room, roomId } = auth;
+
+    // Reuse the same validator as room creation.
+    const validation = validateRoomSettings(settings);
+    if (!validation.ok) {
+      return { error: { code: "bad_settings", message: validation.error } };
+    }
+    // Compose the merged target config against the current values (not defaults), so
+    // partial updates leave other fields alone.
+    const merged = { ...room.config, ...validation.settings };
+    // Re-run the validator against the merged shape so cross-field invariants
+    // (e.g. new bigBlind > existing minBuyIn) are caught.
+    const mergedValidation = validateRoomSettings(merged);
+    if (!mergedValidation.ok) {
+      return { error: { code: "bad_settings", message: mergedValidation.error } };
+    }
+
+    const prevAutoDeal = room.config.autoDealEnabled;
+    const nextAutoDeal = merged.autoDealEnabled;
+
+    const updated = applyEvent(room, { kind: "configReplaced", config: merged });
+    this.rooms.set(roomId, updated);
+    const publicConfig: RoomConfig = {
+      maxSeats: merged.maxSeats,
+      minBuyIn: merged.minBuyIn,
+      maxBuyIn: merged.maxBuyIn,
+      startingStack: merged.startingStack,
+      smallBlind: merged.smallBlind,
+      bigBlind: merged.bigBlind,
+      turnTimerMs: merged.turnTimerMs,
+      timeBankMs: merged.timeBankMs,
+      interHandDelayMs: merged.interHandDelayMs,
+      autoDealEnabled: merged.autoDealEnabled,
+      showOneShowBoth: merged.showOneShowBoth,
+    };
+    const effects: Effect[] = this.broadcastDelta(roomId, {
+      kind: "configUpdated",
+      config: publicConfig,
+    });
+    effects.push(...this.emitSystemChat(roomId, "Host updated room settings."));
+
+    // Auto-deal toggle affects the inter-hand timer.
+    if (prevAutoDeal && !nextAutoDeal) {
+      // Turning off: cancel any pending next-hand timer.
+      const existing = this.nextHandTimers.get(roomId);
+      if (existing) {
+        clearTimeout(existing);
+        this.nextHandTimers.delete(roomId);
+      }
+      if (updated.nextHandAt !== null) {
+        const r2 = applyEvent(updated, { kind: "nextHandScheduled", at: null });
+        this.rooms.set(roomId, r2);
+        effects.push(...this.broadcastDelta(roomId, { kind: "nextHandScheduled", at: null }));
+      }
+    } else if (!prevAutoDeal && nextAutoDeal) {
+      // Turning on: if a hand isn't in progress and the game has started, schedule one.
+      const hand = this.hands.get(roomId);
+      const handInProgress = hand && hand.street !== "complete";
+      if (updated.gameStarted && !handInProgress && !updated.paused && !updated.ended) {
+        effects.push(...this.scheduleNextHand(roomId));
+      }
+    }
+    return effects;
+  }
+
+  handleHostTransfer(
+    sessionId: SessionId,
+    args: { playerId: PlayerId },
+  ): Effect[] | IntentError {
+    const auth = this.requireHost(sessionId);
+    if ("error" in auth) return auth;
+    const { room, roomId } = auth;
+    if (args.playerId === room.hostId) {
+      return { error: { code: "already_host", message: "Already the host" } };
+    }
+    if (!room.players.has(args.playerId)) {
+      return { error: { code: "unknown_player", message: "That player is not in the room" } };
+    }
+    const oldName = room.players.get(room.hostId ?? "")?.displayName ?? "Host";
+    const newName = room.players.get(args.playerId)?.displayName ?? "the new host";
+    const updated = applyEvent(room, { kind: "hostChanged", hostId: args.playerId });
+    this.rooms.set(roomId, updated);
+    const effects: Effect[] = this.broadcastDelta(roomId, {
+      kind: "hostChanged",
+      hostId: args.playerId,
+    });
+    effects.push(...this.emitSystemChat(roomId, `${oldName} transferred host to ${newName}.`));
+    return effects;
+  }
+
+  /**
+   * Pick the next host after an old one is gone. Preference order: the player
+   * at the lowest non-empty seat index, falling back to any other player in
+   * the room. Returns null if no candidate exists.
+   */
+  private pickNextHost(room: RoomState, excluding: PlayerId | null): PlayerId | null {
+    for (let i = 0; i < room.seats.length; i++) {
+      const seat = room.seats[i];
+      if (seat?.kind === "taken" && seat.playerId !== excluding) return seat.playerId;
+    }
+    for (const id of room.players.keys()) {
+      if (id !== excluding) return id;
+    }
+    return null;
+  }
+
+  handleHostEndSession(sessionId: SessionId): Effect[] | IntentError {
+    const auth = this.requireHost(sessionId);
+    if ("error" in auth) return auth;
+    const { room, roomId } = auth;
+    if (room.ended) return { error: { code: "already_ended", message: "Session already ended" } };
+
+    const updated = applyEvent(room, { kind: "sessionEnded" });
+    this.rooms.set(roomId, updated);
+    const effects: Effect[] = this.broadcastDelta(roomId, { kind: "sessionEnded" });
+
+    // Cancel any pending next-hand timer; the session won't schedule new hands.
+    const existing = this.nextHandTimers.get(roomId);
+    if (existing) {
+      clearTimeout(existing);
+      this.nextHandTimers.delete(roomId);
+    }
+
+    effects.push(...this.emitSystemChat(roomId, "Host ended the session."));
+    return effects;
+  }
+
   // ---------- Hand history (Phase 8) ----------
 
   /** Construct a HandRecord for a completed hand, suitable for persistence. */
@@ -898,6 +1304,7 @@ export class RoomManager {
       isFolded: s.isFolded,
     }));
 
+    const revealed = this.currentHandReveals.get(roomId) ?? new Set<PlayerId>();
     return {
       handId: hand.handId,
       roomId,
@@ -921,6 +1328,7 @@ export class RoomManager {
         })),
         finalStacks: hand.seats.map((s) => ({ playerId: s.playerId, stack: s.stack })),
       },
+      revealedPlayerIds: [...revealed],
     };
   }
 
@@ -966,7 +1374,13 @@ export class RoomManager {
   restoreFromSnapshots(blobs: RoomSnapshotBlob[]): void {
     for (const blob of blobs) {
       const roomId = blob.room.roomId;
-      this.rooms.set(roomId, blob.room);
+      // Backfill defaults for fields introduced after a snapshot was first written.
+      const restored: RoomState = {
+        ...blob.room,
+        paused: blob.room.paused ?? false,
+        ended: blob.room.ended ?? false,
+      };
+      this.rooms.set(roomId, restored);
       if (blob.hand) {
         this.hands.set(roomId, blob.hand);
         if (blob.hand.street !== "complete" && blob.hand.currentSeatIdx !== null) {

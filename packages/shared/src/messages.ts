@@ -19,7 +19,14 @@ export type ClientMessage =
   | { type: "hand.preAction"; preAction: PreAction }
   | { type: "hand.cancelPreAction" }
   | { type: "hand.history" }
-  | { type: "hand.replay"; handId: string };
+  | { type: "hand.replay"; handId: string }
+  | { type: "host.pause" }
+  | { type: "host.resume" }
+  | { type: "host.kick"; playerId: PlayerId }
+  | { type: "host.endSession" }
+  | { type: "host.updateSettings"; settings: Partial<import("./types.js").RoomConfig> }
+  | { type: "host.transfer"; playerId: PlayerId }
+  | { type: "seat.showCards" };
 
 export type RoomDelta =
   | { kind: "playerJoined"; player: Player }
@@ -33,7 +40,11 @@ export type RoomDelta =
   | { kind: "hand.action"; playerId: PlayerId; action: Action; chipsCommitted: number; isAllIn: boolean }
   | { kind: "nextHandScheduled"; at: number | null }
   | { kind: "seatStackUpdated"; seatIndex: number; playerId: PlayerId; stack: number; busted: boolean }
-  | { kind: "buyInsUpdated"; playerId: PlayerId; total: number };
+  | { kind: "buyInsUpdated"; playerId: PlayerId; total: number }
+  | { kind: "cashedOutUpdated"; playerId: PlayerId; cashedOut: number }
+  | { kind: "pausedChanged"; paused: boolean }
+  | { kind: "sessionEnded" }
+  | { kind: "configUpdated"; config: import("./types.js").RoomConfig };
 
 export type ServerMessage =
   | { type: "room.snapshot"; snapshot: RoomSnapshot }

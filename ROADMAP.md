@@ -175,17 +175,16 @@ This phase has no UI deliverable. The "test" is `pnpm test` in `packages/engine`
 
 ---
 
-## Phase 10 — Host controls and room settings
+## Phase 10 — Host controls and room settings — **DONE** (straddle deferred to Beyond v1)
 
 **Goal:** hosts can actually run a game without restarting the room.
 
-- Host menu: kick player, pause/resume, adjust blinds, end session.
-- All host actions are logged in the action log so players can see them.
-- Settings configurable at room creation: blinds, starting stack, buy-in range, max seats, turn timer, time bank, auto-deal toggle, show one/show both, straddle.
-- Mid-game settings changes (where safe) take effect at the next hand boundary.
-- Host transfer: explicit handoff, plus auto-promotion if host is gone for 60s.
-
-**Done when:** a host can run an entire 2-hour session without ever needing to recreate the room.
+- ✅ Host menu: kick player, pause/resume, adjust blinds, end session.
+- ✅ All host actions are logged in the action log so players can see them (system chat entries).
+- ✅ Settings configurable at room creation: blinds, starting stack, buy-in range, max seats, turn timer, time bank, auto-deal toggle, show-one-show-both. **Straddle: deferred.**
+- ✅ Mid-game settings changes (where safe) take effect at the next hand boundary (blinds); auto-deal toggle gates the inter-hand timer immediately.
+- ✅ Host transfer: explicit handoff, plus auto-promotion (lowest seat index) if host is gone past the disconnect grace period.
+- ✅ Show-one-show-both: fold-around winners can opt to reveal via `seat.showCards`.
 
 ---
 
