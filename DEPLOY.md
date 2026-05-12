@@ -1,108 +1,108 @@
 # Deploy
 
-Felt's server runs as a Docker image on a DigitalOcean droplet, pulled from DigitalOcean Container Registry (DOCR). The web client builds to static files; deploy them however you like (Vercel, nginx static, etc).
+Felt's server runs as a Docker container on a DigitalOcean droplet. **Deploys happen on the droplet itself** — you SSH in, `git pull`, `docker build`, swap the container. No DOCR round-trip, no cross-machine push.
 
-This doc covers shipping a new server build to production.
+The web client builds to static files; deploy `apps/web/dist` separately (Vercel, nginx static, etc).
 
-## Prerequisites (one-time)
+## Where things live
 
-- `doctl` installed and authenticated: `doctl auth init`
-- Docker Desktop running locally
-- SSH access to the droplet
-- `OPENAI_API_KEY` set in the droplet's environment (required for bots; without it bots fall back to check/fold)
+- **Droplet:** `stock-sentiment` (`167.172.225.16`), region `nyc3`. The name is historical — felt runs here. Only droplet in the DO account.
+- **Repo on droplet:** `/var/www/felt` (also the working directory you start in).
+- **Running container:** `felt-server` (always that exact name — `docker run`, not compose).
+- **Image:** `registry.digitalocean.com/felt-rohan/felt-server:latest` (DOCR registry name: `felt-rohan`).
+- **Managed Postgres:** `stock-sentiment-do-user-...ondigitalocean.com:25060/felt`, connection string in `/var/www/felt/.env`. Uses `do-ca.crt` for TLS verification.
+- **Frontend:** hosted separately; nothing to do here for web-only changes.
 
-Set these shell vars once so the commands below are copy-paste:
+`docker-compose.yml` in the repo is for **local dev only** (it bundles a Postgres container). Production uses managed Postgres and a bare `docker run`.
 
-```sh
-export DOCR_REGISTRY=registry.digitalocean.com/<your-registry-name>
-export IMAGE=$DOCR_REGISTRY/felt-server
-export DROPLET=user@your.droplet.ip
-```
+## Standard release (~2 minutes)
 
-## Standard release
-
-### 1. Push code to `main`
+Run this on the droplet, from `/var/www/felt`:
 
 ```sh
-git add apps/ packages/
-git commit -m "feat: <summary>"
-git push origin main
-```
+cd /var/www/felt
+git pull
 
-### 2. Build + push the image to DOCR
+# Tag the currently running image as a rollback point BEFORE building.
+OLD=$(docker inspect felt-server --format '{{.Image}}')
+docker tag $OLD registry.digitalocean.com/felt-rohan/felt-server:rollback-pre-$(date +%Y%m%d-%H%M%S)
 
-```sh
-doctl registry login
-
-# --platform linux/amd64 is REQUIRED on Apple Silicon — without it you
-# push an arm64 image the droplet (amd64) can't run.
+# Build new image (we're on linux/amd64 — no --platform flag needed).
 SHA=$(git rev-parse --short HEAD)
-docker build --platform linux/amd64 -t $IMAGE:$SHA -t $IMAGE:latest .
-docker push $IMAGE:$SHA
-docker push $IMAGE:latest
-```
+IMAGE=registry.digitalocean.com/felt-rohan/felt-server
+docker build -t $IMAGE:$SHA -t $IMAGE:latest .
 
-The dual-tag (`:$SHA` + `:latest`) lets you roll back to any prior commit by retagging.
-
-### 3. Pull + restart on the droplet
-
-SSH in and pull the new image:
-
-```sh
-ssh $DROPLET
-cd /path/to/felt   # wherever docker-compose.yml lives on the droplet
-docker compose pull server
-docker compose up -d server
-docker compose logs -f server   # confirm it boots cleanly, then ctrl-C
-```
-
-If you're running the server as a bare `docker run` instead of compose, swap step 3 for:
-
-```sh
-docker pull $IMAGE:latest
+# Swap the container. ~3s of WS downtime.
 docker stop felt-server && docker rm felt-server
 docker run -d --name felt-server --restart unless-stopped \
-  -p 8080:8080 \
-  --env-file /path/to/felt.env \
+  -p 127.0.0.1:8080:8080 \
+  --env-file /var/www/felt/.env \
+  -v /var/www/felt/do-ca.crt:/etc/ssl/do-ca.crt:ro \
   $IMAGE:latest
+
+# Verify.
+sleep 2 && docker logs --tail 30 felt-server
+# Expect: "server up on :8080 (persistence: postgres)"
+curl -sS -o /dev/null -w "%{http_code}\n" \
+  -H "Connection: Upgrade" -H "Upgrade: websocket" \
+  -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+  -H "Sec-WebSocket-Version: 13" \
+  http://127.0.0.1:8080/ws
+# Expect: 101
 ```
+
+The `rollback-pre-<timestamp>` tag keeps the prior image alive locally even after `:latest` is overwritten. Without that tag, the old layers get GC'd on the next `docker image prune` and rollback gets painful.
+
+### Why we skip DOCR push
+
+The doctl token on this droplet has **read-only** registry scope — `doctl registry login` works, but `docker push` fails with `registry:update permission is required`. Since the build happens on the droplet itself, there's nothing to push *to* anyway: the new `:latest` image is already on the host that needs to run it. The `rollback-pre-*` local tag is the rollback mechanism.
+
+If you ever need true DOCR rollback history (e.g. for a fresh droplet), re-init doctl with a read-write token and append `docker push $IMAGE:$SHA && docker push $IMAGE:latest` after the build.
+
+## Rollback
+
+```sh
+docker stop felt-server && docker rm felt-server
+docker run -d --name felt-server --restart unless-stopped \
+  -p 127.0.0.1:8080:8080 \
+  --env-file /var/www/felt/.env \
+  -v /var/www/felt/do-ca.crt:/etc/ssl/do-ca.crt:ro \
+  registry.digitalocean.com/felt-rohan/felt-server:rollback-pre-<TIMESTAMP>
+```
+
+List rollback tags: `docker images registry.digitalocean.com/felt-rohan/felt-server | grep rollback`.
 
 ## What changed determines what you redeploy
 
-- **Server / `packages/engine` / `packages/shared`** — rebuild + push the image (full flow above).
-- **`apps/web` only** — no new image. Rebuild the frontend (`pnpm --filter @felt/web build`) and ship `apps/web/dist` to wherever you host static files. The Dockerfile only copies server workspaces, so frontend changes never invalidate the image.
+- **`apps/server` / `packages/engine` / `packages/shared`** — full flow above.
+- **`apps/web` only** — no container rebuild. `pnpm --filter @felt/web build` and ship `apps/web/dist` to your static host. The Dockerfile copies only server workspaces, so frontend changes never invalidate the image.
+- **`.env` only** — no rebuild; `docker stop felt-server && docker start felt-server` re-reads the env file. (Or `docker restart felt-server` — same effect since `--env-file` is read at container start.)
 
 ## Environment variables
 
-The server reads these at boot. Set them in the droplet's `.env` (or compose env, or systemd unit — whatever you're using):
+Server reads these at boot from `/var/www/felt/.env`:
 
-| Var | Required | Default | Notes |
-|---|---|---|---|
-| `PORT` | no | `8080` | Server listen port |
-| `CORS_ORIGIN` | yes (prod) | `*` | Lock to your web origin, e.g. `https://felt.example.com` |
-| `DATABASE_URL` | yes | — | Postgres connection string. Used for hand history + room snapshots |
-| `OPENAI_API_KEY` | for bots | — | Without this, bots check/fold every turn |
+| Var | Required | Notes |
+|---|---|---|
+| `PORT` | no | Defaults to `8080`. Don't change without updating the `-p` flag and nginx upstream. |
+| `CORS_ORIGIN` | yes | Lock to the web origin in prod, e.g. `https://felt.example.com`. `*` is fine for early testing. |
+| `DATABASE_URL` | yes | Managed Postgres connection string. Must include `?sslmode=require`. |
+| `NODE_EXTRA_CA_CERTS` | yes | Must be `/etc/ssl/do-ca.crt` — matches the `-v` mount. Without this, TLS to managed Postgres fails. |
+| `NODE_ENV` | yes | `production`. |
+| `OPENAI_API_KEY` | for bots | Without it, bots check/fold every turn. |
 
-Never commit any of these. The droplet's env is the source of truth.
+`.env` is gitignored; the droplet copy is the source of truth. Never commit it.
 
-## Rolling back
+## Provably-fair audit trail
 
-DOCR keeps every tag you push. To revert to the previous commit's image:
+The seed → seedHash chain depends on `HandRecord` rows in Postgres. After a deploy, play a hand and check the `hand_records` table is being written. If Postgres is down the server still runs but history is silently lost.
 
-```sh
-ssh $DROPLET
-# Find the previous SHA you want (DOCR UI or `doctl registry repository list-tags felt-server`)
-docker compose pull server   # if you re-tagged :latest
-# Or pin compose to an explicit SHA tag and `up -d server`
-```
+## Gotchas
 
-## Provably-fair note
-
-The seed → seedHash audit trail relies on persisted `HandRecord` rows. After any deploy, verify Postgres is healthy and the `hand_records` table is still being written to (open a room, play a hand, check the DB). If Postgres is down the server still runs but history is lost.
-
-## Common gotchas
-
-- **WebSockets dropping after ~1 minute** — your nginx in front of the server needs `proxy_read_timeout 3600s` and the `Upgrade`/`Connection` upgrade headers. See `CLAUDE.md` → "Phase ordering hazards".
-- **`exec format error` on the droplet** — you pushed an arm64 image. Rebuild with `--platform linux/amd64`.
-- **Bots silently check/fold after deploy** — `OPENAI_API_KEY` wasn't set in the droplet env, or the daily call cap (`5000` by default, in-memory) was hit. Restart the container to reset the counter.
-- **`doctl registry login` expired** — DOCR creds expire periodically; just rerun.
+- **`exec format error` on container start** — you built on Apple Silicon and pushed an arm64 image. Rebuild on the droplet (or with `--platform linux/amd64`). Doesn't happen with the on-droplet flow above.
+- **Bots silently check/fold after deploy** — `OPENAI_API_KEY` missing from `/var/www/felt/.env`, or the in-memory daily cap (`5000` calls) was hit. Restart the container to reset the counter.
+- **WebSockets dropping after ~1 minute** — nginx in front needs `proxy_read_timeout 3600s` and the `Upgrade`/`Connection` upgrade headers. See `CLAUDE.md` → "Phase ordering hazards".
+- **`tsconfig.tsbuildinfo` blocking `git pull`** — it's a build artifact that ends up tracked. Discard it: `git checkout -- apps/web/tsconfig.tsbuildinfo && git pull`.
+- **`doctl registry login` "permission required"** — the token is read-only by design. You don't need a successful login for the on-droplet flow; ignore.
+- **Container starts but server doesn't boot** — check `docker logs felt-server` for `PG` / TLS errors. Usually means `NODE_EXTRA_CA_CERTS` is missing from `.env` or `do-ca.crt` is missing from `/var/www/felt/`.
+- **Port `8080` is loopback-only (`127.0.0.1:8080`)** — nginx on the droplet proxies to it. If you ever change the bind to `0.0.0.0`, you're exposing the WS server directly; lock down the firewall first.
