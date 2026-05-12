@@ -75,7 +75,7 @@ List rollback tags: `docker images registry.digitalocean.com/felt-rohan/felt-ser
 ## What changed determines what you redeploy
 
 - **`apps/server` / `packages/engine` / `packages/shared`** — full flow above.
-- **`apps/web` only** — no container rebuild. `pnpm --filter @felt/web build` and ship `apps/web/dist` to your static host. The Dockerfile copies only server workspaces, so frontend changes never invalidate the image.
+- **`apps/web` only** — no container rebuild. Just run `pnpm --filter @felt/web build` on the droplet; nginx serves `/var/www/felt/apps/web/dist` directly (see `/etc/nginx/sites-available/felt`), so the build output *is* the deploy. Vite content-hashes asset filenames and `index.html` is uncached, so users pick up the new bundle on their next navigation — no nginx reload needed. The Dockerfile copies only server workspaces, so frontend changes never invalidate the server image.
 - **`.env` only** — no rebuild; `docker stop felt-server && docker start felt-server` re-reads the env file. (Or `docker restart felt-server` — same effect since `--env-file` is read at container start.)
 
 ## Environment variables
