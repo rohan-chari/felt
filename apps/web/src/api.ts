@@ -1,6 +1,15 @@
 import type { RoomConfig } from "@felt/shared";
 
-const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8080";
+function resolveApiUrl(): string {
+  const fromEnv = import.meta.env.VITE_API_URL as string | undefined;
+  if (fromEnv) return fromEnv;
+  // Prod: nginx proxies /rooms and /ws on the same origin as the static bundle.
+  // Dev: vite dev server runs on :5173 while the server runs on :8080.
+  if (import.meta.env.DEV) return "http://localhost:8080";
+  return typeof window !== "undefined" ? window.location.origin : "http://localhost:8080";
+}
+
+const API_URL = resolveApiUrl();
 
 export function apiUrl(path: string): string {
   return `${API_URL}${path}`;
