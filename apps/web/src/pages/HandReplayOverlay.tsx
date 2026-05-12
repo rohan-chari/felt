@@ -1,4 +1,4 @@
-import type { Card, HandRecord, HandView, Player, Seat } from "@felt/shared";
+import { type Card, formatMoney, type HandRecord, type HandView, type Player, type Seat } from "@felt/shared";
 import { useEffect, useMemo, useState } from "react";
 import { Table } from "./Table";
 
@@ -200,8 +200,8 @@ function describeEntry(entry: HandRecord["actionLog"][number], record: HandRecor
     case "call":
       return `${name} called`;
     case "bet":
-      return `${name} bet $${a.amount}`;
+      return `${name} bet ${formatMoney(a.amount)}`;
     case "raise":
-      return `${name} raised to $${a.to}`;
+      return `${name} raised to ${formatMoney(a.to)}`;
   }
 }

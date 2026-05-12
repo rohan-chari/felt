@@ -1,4 +1,4 @@
-import type { Card, HandRecord } from "@felt/shared";
+import { type Card, formatMoney, type HandRecord } from "@felt/shared";
 import { useState } from "react";
 
 type Props = {
@@ -49,9 +49,9 @@ function actionSummary(action: HandRecord["actionLog"][number]): string {
     case "call":
       return "called";
     case "bet":
-      return `bet $${a.amount}`;
+      return `bet ${formatMoney(a.amount)}`;
     case "raise":
-      return `raised to $${a.to}`;
+      return `raised to ${formatMoney(a.to)}`;
   }
 }
 
@@ -84,7 +84,7 @@ export function HandHistoryPanel({ hands, myPlayerId, onOpenReplay }: Props) {
               >
                 <span className="hh-num">#{idx + 1}</span>
                 <span className="hh-winner">
-                  {winner ? `${winnerName(h, winner.playerId)} won $${totalPot}` : "no winner"}
+                  {winner ? `${winnerName(h, winner.playerId)} won ${formatMoney(totalPot)}` : "no winner"}
                 </span>
                 {h.board.length > 0 && (
                   <span className="hh-board">
@@ -135,7 +135,7 @@ function HandDetail({
       <div className="hh-detail-row">
         <span className="hh-label">Blinds:</span>
         <span>
-          ${record.blinds.sb} / ${record.blinds.bb}
+          {formatMoney(record.blinds.sb)} / {formatMoney(record.blinds.bb)}
         </span>
       </div>
       <div className="hh-detail-row">
@@ -185,13 +185,13 @@ function HandDetail({
       <ul className="hh-awards">
         {record.result.awards.map((a, i) => (
           <li key={i} className="hh-award-row">
-            <span>${a.amount}</span>
+            <span>{formatMoney(a.amount)}</span>
             <span> → </span>
             <span>
               {a.winners.map((w, wi) => (
                 <span key={wi}>
                   {wi > 0 && ", "}
-                  {winnerName(record, w.playerId)} (${w.amount}, {w.handDescr})
+                  {winnerName(record, w.playerId)} ({formatMoney(w.amount)}, {w.handDescr})
                 </span>
               ))}
             </span>

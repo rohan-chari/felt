@@ -26,13 +26,22 @@ export type ClientMessage =
   | { type: "host.endSession" }
   | { type: "host.updateSettings"; settings: Partial<import("./types.js").RoomConfig> }
   | { type: "host.transfer"; playerId: PlayerId }
+  | { type: "host.addBot"; seatIndex?: number }
+  | { type: "host.removeBot"; playerId: PlayerId }
   | { type: "seat.showCards" };
 
 export type RoomDelta =
   | { kind: "playerJoined"; player: Player }
   | { kind: "playerLeft"; playerId: PlayerId }
   | { kind: "hostChanged"; hostId: PlayerId | null }
-  | { kind: "seatTaken"; seatIndex: number; playerId: PlayerId; stack: number }
+  | {
+      kind: "seatTaken";
+      seatIndex: number;
+      playerId: PlayerId;
+      stack: number;
+      isBot?: boolean;
+      botPersona?: import("./types.js").BotPersona;
+    }
   | { kind: "seatLeft"; seatIndex: number; playerId: PlayerId }
   | { kind: "gameStarted" }
   | { kind: "chat"; message: ChatMessage }

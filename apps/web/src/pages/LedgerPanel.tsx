@@ -1,4 +1,4 @@
-import type { BuyInLedgerEntry, Player, RoomId, Seat } from "@felt/shared";
+import { type BuyInLedgerEntry, formatMoney, type Player, type RoomId, type Seat } from "@felt/shared";
 import { useState } from "react";
 
 type LedgerPanelProps = {
@@ -58,8 +58,8 @@ function formatLedgerText(roomId: RoomId | null, rows: LedgerRow[]): string {
   const nameWidth = Math.max(6, ...rows.map((r) => r.displayName.length));
   const lines = rows.map((r) => {
     const name = r.displayName.padEnd(nameWidth);
-    const net = `${r.net > 0 ? "+" : ""}$${r.net}`;
-    return `${name}  ${net.padStart(8)}   (buy-in $${r.buyIn}, stack $${r.stack})`;
+    const net = `${r.net > 0 ? "+" : ""}${formatMoney(r.net)}`;
+    return `${name}  ${net.padStart(10)}   (buy-in ${formatMoney(r.buyIn)}, stack ${formatMoney(r.stack)})`;
   });
   return [header, ...lines].join("\n");
 }
@@ -107,11 +107,11 @@ export function LedgerPanel(props: LedgerPanelProps) {
           {rows.map((r) => (
             <tr key={r.playerId}>
               <td className="ledger-name">{r.displayName}</td>
-              <td>${r.buyIn}</td>
-              <td>${r.stack}</td>
+              <td>{formatMoney(r.buyIn)}</td>
+              <td>{formatMoney(r.stack)}</td>
               <td className={r.net > 0 ? "ledger-up" : r.net < 0 ? "ledger-down" : ""}>
                 {r.net > 0 ? "+" : ""}
-                ${r.net}
+                {formatMoney(r.net)}
               </td>
             </tr>
           ))}

@@ -1,4 +1,4 @@
-import type { Card, HandView, Player, Seat } from "@felt/shared";
+import { type Card, formatMoney, type HandView, type Player, type Seat } from "@felt/shared";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChipPile } from "./ChipPile";
 import { CountdownBorder } from "./CountdownBorder";
@@ -148,18 +148,18 @@ function PotBadge({ pots }: { pots: HandView["pots"] }) {
   const sidePots = pots.slice(1).filter((p) => p.amount > 0);
   const splitText =
     sidePots.length > 0
-      ? `main $${pots[0]?.amount ?? 0}${sidePots.map((p, i) => ` · side ${i + 1} $${p.amount}`).join("")}`
+      ? `main ${formatMoney(pots[0]?.amount ?? 0)}${sidePots.map((p, i) => ` · side ${i + 1} ${formatMoney(p.amount)}`).join("")}`
       : null;
   return (
     <div
       className="pot-badge"
       title={pots
-        .map((p, i) => `${i === 0 ? "Main" : `Side ${i}`}: $${p.amount}`)
+        .map((p, i) => `${i === 0 ? "Main" : `Side ${i}`}: ${formatMoney(p.amount)}`)
         .join(" · ")}
     >
       <div className="pot-badge-row">
         <span className="pot-badge-label">Pot</span>
-        <span className="pot-badge-amount">${total}</span>
+        <span className="pot-badge-amount">{formatMoney(total)}</span>
       </div>
       {splitText && <div className="pot-badge-split">{splitText}</div>}
     </div>
@@ -334,7 +334,7 @@ export function Table(props: TableProps) {
                 size="sm"
                 showTotal={true}
                 showLabels={false}
-                title={`Bet: $${handSeat.committedThisRound}`}
+                title={`Bet: ${formatMoney(handSeat.committedThisRound)}`}
               />
             </div>
           </div>
@@ -446,6 +446,7 @@ export function Table(props: TableProps) {
                 <div className="seat-name">
                   {playerName}
                   {seat.playerId === hostId && <span className="host-badge">★</span>}
+                  {seat.isBot && <span className="bot-badge" title="AI bot">BOT</span>}
                 </div>
                 {seat.busted ? (
                   <div className="seat-busted">Busted</div>

@@ -162,23 +162,66 @@ h3 {
 }
 
 .home-tagline {
-  margin: 0 0 32px;
+  margin: 0 0 20px;
   color: var(--muted);
   font-size: 16px;
   font-weight: 600;
 }
 
+/* Three-step onboarding hint */
+.home-steps {
+  list-style: none;
+  margin: 0 0 28px;
+  padding: 0;
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.home-steps li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-pill);
+  padding: 5px 12px 5px 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  box-shadow: 0 2px 0 var(--ink);
+}
+
+.home-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
 .home-cta {
+  display: block;
+  width: 100%;
   background: var(--primary);
   color: #fff;
   border: var(--border);
   border-radius: var(--radius-pill);
-  padding: 14px 32px;
-  font-size: 18px;
+  padding: 16px 32px;
+  font-size: 20px;
   font-weight: 800;
   cursor: pointer;
   box-shadow: var(--shadow-hard);
   transition: transform 80ms ease, box-shadow 80ms ease;
+  letter-spacing: 0.02em;
 }
 
 .home-cta:hover:not(:disabled) {
@@ -203,42 +246,60 @@ h3 {
   font-weight: 700;
 }
 
+/* Identity switch — footnote row */
+.home-footnote {
+  margin: 16px 0 0;
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .home-switch {
-  margin-top: 18px;
   background: none;
   border: none;
-  padding: 6px 10px;
+  padding: 2px 4px;
   font: inherit;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--ink);
-  opacity: 0.55;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  opacity: 0.5;
   cursor: pointer;
-  border-radius: 8px;
-  transition: opacity 120ms ease, background 120ms ease;
+  border-radius: 4px;
+  transition: opacity 120ms ease;
 }
 
 .home-switch:hover {
-  opacity: 1;
-  background: rgba(26, 21, 56, 0.08);
+  opacity: 0.85;
+}
+
+.home-footnote-confirm {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--good-deep);
+  opacity: 0.85;
 }
 
 .home-settings-toggle {
-  margin-top: 14px;
+  margin-top: 12px;
   background: none;
   border: none;
-  padding: 6px 10px;
+  padding: 4px 8px;
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
-  color: var(--ink);
-  opacity: 0.75;
+  color: var(--muted);
+  opacity: 0.7;
   cursor: pointer;
-  border-radius: 8px;
+  border-radius: 6px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: opacity 120ms ease;
 }
 .home-settings-toggle:hover {
   opacity: 1;
-  background: rgba(26, 21, 56, 0.08);
+  text-decoration: none;
+  background: rgba(26, 21, 56, 0.06);
 }
 
 .home-settings {
@@ -308,27 +369,51 @@ h3 {
   position: relative;
 }
 
-/* Floating room-code chip (top-left) replacing the old admin header */
+/* Full-width top toolbar with three groups: host (left), room id (center), toggles (right) */
 .room-topbar {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   background: var(--surface);
   border: var(--border);
-  border-radius: var(--radius-pill);
-  padding: 6px 6px 6px 16px;
+  border-radius: 16px;
+  padding: 6px 10px;
   box-shadow: var(--shadow-hard-sm);
-  align-self: flex-start;
-  margin-bottom: 12px;
+  /* The felt-table's box-shadow rail rings extend ~29px beyond the element
+     boundary. Use margin-bottom large enough to clear that overhang so the
+     topbar and the table's wooden rail never visually touch. */
+  margin-bottom: 44px;
+  width: 100%;
+  /* Establish a stacking context so the HostMenu dropdown (z-index: 100 within
+     this context) paints above the table's internal layers. */
+  position: relative;
+  z-index: 50;
+}
+
+.room-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  /* Reserve space even when HostMenu is absent so center stays centered */
+  min-width: 48px;
+}
+
+.room-topbar-center {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  justify-content: center;
   font-size: 14px;
 }
 
-.room-topbar h1 {
-  margin: 0;
+.room-topbar-label {
+  font-family: var(--font-display);
   font-size: 16px;
   font-weight: 700;
-  letter-spacing: 0.02em;
   color: var(--ink);
+  letter-spacing: 0.02em;
 }
 
 .room-topbar .room-code {
@@ -336,6 +421,40 @@ h3 {
   font-weight: 800;
   color: var(--primary-deep);
   font-size: 15px;
+}
+
+.room-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+/* Topbar toggle buttons for History / Chat */
+.topbar-side-btn {
+  background: var(--surface-2);
+  color: var(--ink);
+  border: var(--border-thin);
+  border-radius: var(--radius-pill);
+  padding: 5px 14px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 2px 0 var(--ink);
+  transition: transform 80ms ease, box-shadow 80ms ease, background 80ms ease;
+}
+
+.topbar-side-btn:hover {
+  background: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: 0 3px 0 var(--ink);
+}
+
+.topbar-side-btn.active {
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 0 2px 0 var(--ink);
 }
 
 .share-copy {
@@ -411,7 +530,9 @@ h3 {
 
 .room-layout main {
   width: 100%;
-  max-width: 1200px;
+  /* 860 px keeps the table visually contained at typical desktop widths
+     (~1000–1400 px) while still filling smaller viewports. */
+  max-width: 860px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -639,6 +760,20 @@ h3 {
   color: var(--accent-deep);
   font-size: 14px;
   margin-left: 2px;
+}
+
+.bot-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 4px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: var(--ink);
+  background: var(--accent);
+  border: 1.5px solid var(--ink);
+  border-radius: 4px;
+  vertical-align: middle;
 }
 
 .seat-busted,
@@ -1449,15 +1584,14 @@ h3 {
 .session-banner-ended  { background: var(--bad); color: #fff; }
 
 /* ---------- Host menu ---------- */
+/* Sits inside .room-topbar-left — no longer fixed-position */
 .host-menu {
-  position: fixed;
-  top: 16px;
-  left: 16px;
-  z-index: 20;
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 6px;
   align-items: flex-start;
+  z-index: 20;
 }
 .host-menu-toggle {
   background: var(--surface);
@@ -1472,6 +1606,9 @@ h3 {
 }
 .host-menu-toggle:hover { background: var(--accent); }
 .host-menu-body {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
   background: var(--surface);
   border: var(--border);
   border-radius: 14px;
@@ -1481,6 +1618,8 @@ h3 {
   flex-direction: column;
   gap: 8px;
   min-width: 200px;
+  /* Overflow the topbar without affecting layout */
+  z-index: 100;
 }
 .host-action {
   background: var(--surface-2, #fff);
@@ -1494,7 +1633,10 @@ h3 {
   text-align: left;
 }
 .host-action:hover { filter: brightness(0.96); }
-.host-action-pause { background: var(--warn); }
+.host-action-pause {
+  background: var(--surface-2, #fff4dc);
+  color: var(--ink);
+}
 .host-action-resume { background: var(--good); color: #fff; }
 .host-action-end { background: var(--bad); color: #fff; }
 .host-action-cancel {
@@ -1578,11 +1720,26 @@ h3 {
 }
 .host-settings-grid {
   display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 6px 10px;
-  align-items: center;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
   font-size: 13px;
   font-weight: 700;
+}
+.host-settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.host-settings-field-label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  opacity: 0.65;
+  white-space: nowrap;
+}
+.host-settings-field-wide {
+  grid-column: 1 / -1;
 }
 .host-settings input[type="number"] {
   width: 100%;
@@ -1852,91 +2009,108 @@ h3 {
 }
 
 /* ===========================================================================
- * Chat panel + toggle
+ * Right side rail — unified History + Chat panel
+ * Slides in from the right; tab bar at the top switches between content.
  * ========================================================================= */
 
-.chat-overlay {
+.side-rail {
   position: fixed;
   top: 0;
   right: 0;
   height: 100vh;
-  width: 340px;
-  max-width: 90vw;
-  padding: 16px;
+  width: 360px;
+  max-width: 92vw;
   box-sizing: border-box;
   background: var(--surface);
   border-left: var(--border);
-  box-shadow: -8px 0 24px rgba(26, 21, 56, 0.18);
+  box-shadow: -6px 0 24px rgba(26, 21, 56, 0.18);
   transform: translateX(100%);
   transition: transform 240ms cubic-bezier(0.4, 0, 0.2, 1);
-  z-index: 18;
+  /* Sits above the topbar (50) and host-menu dropdown (100 inside topbar context)
+     since fixed elements share the root stacking context. */
+  z-index: 70;
   display: flex;
   flex-direction: column;
 }
 
-.chat-overlay.open {
+.side-rail.open {
   transform: translateX(0);
 }
 
-.chat-overlay .chat-panel {
+/* Tab bar */
+.side-rail-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 12px 8px;
+  border-bottom: var(--border-thin);
+  background: var(--surface-2);
+  flex-shrink: 0;
+}
+
+.side-rail-tab {
+  flex: 1;
+  background: transparent;
+  border: var(--border-thin);
+  border-radius: var(--radius-pill);
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  color: var(--muted);
+  transition: background 100ms ease, color 100ms ease;
+}
+
+.side-rail-tab:hover {
+  background: rgba(26, 21, 56, 0.06);
+  color: var(--ink);
+}
+
+.side-rail-tab.active {
+  background: var(--primary);
+  border-color: var(--ink);
+  color: #fff;
+}
+
+.side-rail-close {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 8px;
+  line-height: 1;
+  transition: color 100ms ease, background 100ms ease;
+}
+
+.side-rail-close:hover {
+  color: var(--ink);
+  background: rgba(26, 21, 56, 0.06);
+}
+
+/* Scrollable content area */
+.side-rail-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* When chat tab is active, let ChatPanel fill the body */
+.side-rail-body .chat-panel {
   flex: 1;
   height: auto;
+  min-height: 0;
   border: none;
   background: transparent;
   box-shadow: none;
-}
-
-.chat-toggle {
-  position: fixed;
-  top: 50%;
-  right: 0;
-  transform: translateY(-50%);
-  width: 40px;
-  min-height: 110px;
-  border: var(--border);
-  border-right: none;
-  background: var(--primary);
-  border-radius: 14px 0 0 14px;
-  cursor: pointer;
-  color: #fff;
-  box-shadow: -3px 4px 0 var(--ink);
-  z-index: 22;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px 0;
-  transition: right 240ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.chat-toggle.open {
-  right: 340px;
-}
-
-@media (max-width: 600px) {
-  .chat-toggle.open {
-    right: 90vw;
-  }
-}
-
-.chat-toggle:hover {
-  background: var(--primary-deep);
-}
-
-.chat-toggle-arrow {
-  font-size: 20px;
-  line-height: 1;
-  font-weight: 800;
-}
-
-.chat-toggle-label {
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  font-size: 12px;
-  letter-spacing: 1.5px;
-  text-transform: uppercase;
-  font-weight: 800;
 }
 
 .chat-panel {
@@ -2024,6 +2198,10 @@ h3 {
   .room-page {
     padding: 12px 12px 130px;
   }
+  .room-topbar {
+    /* Mobile rail overhang is ~20px; keep a comfortable gap. */
+    margin-bottom: 28px;
+  }
   .felt-table {
     aspect-ratio: 1.1 / 1;
     box-shadow:
@@ -2098,82 +2276,9 @@ h3 {
   }
 }
 
-/* ===========================================================================
- * History overlay (ledger + hand history) — slides in from the LEFT
- * (chat overlay slides in from the right; this one balances the layout).
- * ========================================================================= */
-
-.history-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  height: 100vh;
-  width: 360px;
-  max-width: 92vw;
-  padding: 16px;
-  box-sizing: border-box;
-  background: var(--surface);
-  border-right: var(--border);
-  box-shadow: 4px 0 16px rgba(26, 21, 56, 0.18);
-  transform: translateX(-100%);
-  transition: transform 220ms ease;
-  z-index: 18;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  overflow-y: auto;
-}
-
-.history-overlay.open {
-  transform: translateX(0);
-}
-
-.history-toggle {
-  position: fixed;
-  top: 50%;
-  left: 0;
-  transform: translateY(-50%);
-  width: 36px;
-  min-height: 110px;
-  border: var(--border);
-  border-left: none;
-  background: var(--surface);
-  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
-  cursor: pointer;
-  color: var(--ink);
-  box-shadow: 2px 0 0 var(--ink);
-  z-index: 22;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 10px 0;
-  font-weight: 800;
-  transition: left 220ms ease;
-}
-
-.history-toggle.open {
-  left: 360px;
-}
-
-@media (max-width: 600px) {
-  .history-toggle.open {
-    left: 92vw;
-  }
-}
-
-.history-toggle-arrow {
-  font-size: 18px;
-  line-height: 1;
-}
-
-.history-toggle-label {
-  writing-mode: vertical-rl;
-  font-size: 11px;
-  letter-spacing: 1.5px;
-  text-transform: uppercase;
-}
+/* History + Ledger panels now live inside .side-rail-body (tab = "history").
+   The standalone history-overlay and history-toggle have been removed and
+   consolidated into the right side-rail introduced above. */
 
 /* ----- Ledger ----- */
 

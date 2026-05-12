@@ -1,4 +1,4 @@
-import type { HandView } from "@felt/shared";
+import { formatMoney, type HandView, parseMoney } from "@felt/shared";
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { getOrCreatePlayerId } from "../identity";
@@ -74,8 +74,8 @@ export function Room() {
   const [submitted, setSubmitted] = useState(false);
   const [pendingSeat, setPendingSeat] = useState<number | null>(null);
   const [rebuyOpen, setRebuyOpen] = useState(false);
-  const [chatOpen, setChatOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [sideOpen, setSideOpen] = useState(false);
+  const [sideTab, setSideTab] = useState<"chat" | "history">("chat");
   const playerId = getOrCreatePlayerId();
 
   const { view, send, clearTransientError, clearReplay, pushTransientError } = useRoomConnection({
@@ -183,12 +183,63 @@ export function Room() {
     setRebuyOpen(false);
   };
 
+  const openSideTab = (tab: "chat" | "history") => {
+    setSideTab(tab);
+    setSideOpen(true);
+  };
+
   return (
     <div className="room-page">
+      {/* ── Top toolbar ────────────────────────────────────────────── */}
       <div className="room-topbar">
-        <h1>Room</h1>
-        <span className="room-code">{roomId}</span>
-        <ShareLink url={window.location.href} />
+        {/* Left group: host controls (host only) */}
+        <div className="room-topbar-left">
+          {isHost && (
+            <HostMenu
+              hostId={playerId}
+              players={view.players}
+              seats={view.seats}
+              config={view.config}
+              paused={view.paused}
+              ended={view.ended}
+              onPause={() => send({ type: "host.pause" })}
+              onResume={() => send({ type: "host.resume" })}
+              onEndSession={() => send({ type: "host.endSession" })}
+              onKick={(targetId) => send({ type: "host.kick", playerId: targetId })}
+              onUpdateSettings={(settings) => send({ type: "host.updateSettings", settings })}
+              onTransferHost={(targetId) => send({ type: "host.transfer", playerId: targetId })}
+              onAddBot={() => send({ type: "host.addBot" })}
+              onRemoveBot={(targetId) => send({ type: "host.removeBot", playerId: targetId })}
+            />
+          )}
+        </div>
+
+        {/* Center group: room identity */}
+        <div className="room-topbar-center">
+          <span className="room-topbar-label">Room</span>
+          <span className="room-code">{roomId}</span>
+          <ShareLink url={window.location.href} />
+        </div>
+
+        {/* Right group: side panel toggles */}
+        <div className="room-topbar-right">
+          <button
+            type="button"
+            className={`topbar-side-btn ${sideOpen && sideTab === "history" ? "active" : ""}`}
+            onClick={() => sideOpen && sideTab === "history" ? setSideOpen(false) : openSideTab("history")}
+            aria-label="Toggle history panel"
+          >
+            History
+          </button>
+          <button
+            type="button"
+            className={`topbar-side-btn ${sideOpen && sideTab === "chat" ? "active" : ""}`}
+            onClick={() => sideOpen && sideTab === "chat" ? setSideOpen(false) : openSideTab("chat")}
+            aria-label="Toggle chat panel"
+          >
+            Chat
+          </button>
+        </div>
       </div>
 
       {view.ended ? (
@@ -205,23 +256,6 @@ export function Room() {
         <div className="waiting-banner">
           You're seated. You'll be dealt in next hand.
         </div>
-      )}
-
-      {isHost && (
-        <HostMenu
-          hostId={playerId}
-          players={view.players}
-          seats={view.seats}
-          config={view.config}
-          paused={view.paused}
-          ended={view.ended}
-          onPause={() => send({ type: "host.pause" })}
-          onResume={() => send({ type: "host.resume" })}
-          onEndSession={() => send({ type: "host.endSession" })}
-          onKick={(targetId) => send({ type: "host.kick", playerId: targetId })}
-          onUpdateSettings={(settings) => send({ type: "host.updateSettings", settings })}
-          onTransferHost={(targetId) => send({ type: "host.transfer", playerId: targetId })}
-        />
       )}
 
       <div className="room-layout">
@@ -289,54 +323,66 @@ export function Room() {
             {view.gameStarted && !view.hand && <span className="hint">Game in progress.</span>}
           </div>
         </main>
-
       </div>
 
-      <aside className={`chat-overlay ${chatOpen ? "open" : "closed"}`} aria-hidden={!chatOpen}>
-        <ChatPanel
-          messages={view.chat}
-          onSend={(text) => send({ type: "chat.send", text })}
-        />
-      </aside>
-
-      <button
-        type="button"
-        className={`chat-toggle ${chatOpen ? "open" : "closed"}`}
-        onClick={() => setChatOpen((v) => !v)}
-        aria-label={chatOpen ? "Hide chat" : "Show chat"}
-        title={chatOpen ? "Hide chat" : "Show chat"}
-      >
-        <span className="chat-toggle-arrow">{chatOpen ? "›" : "‹"}</span>
-        <span className="chat-toggle-label">Chat</span>
-      </button>
-
+      {/* ── Right side rail (History + Chat consolidated) ─────────── */}
       <aside
-        className={`history-overlay ${historyOpen ? "open" : "closed"}`}
-        aria-hidden={!historyOpen}
+        className={`side-rail ${sideOpen ? "open" : ""}`}
+        aria-label="Side panel"
+        aria-hidden={!sideOpen}
       >
-        <LedgerPanel
-          roomId={view.roomId}
-          players={view.players}
-          seats={view.seats}
-          buyIns={view.buyIns}
-        />
-        <HandHistoryPanel
-          hands={view.handHistory}
-          myPlayerId={playerId}
-          onOpenReplay={(handId) => send({ type: "hand.replay", handId })}
-        />
-      </aside>
+        <div className="side-rail-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={sideTab === "history"}
+            className={`side-rail-tab ${sideTab === "history" ? "active" : ""}`}
+            onClick={() => setSideTab("history")}
+          >
+            History
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={sideTab === "chat"}
+            className={`side-rail-tab ${sideTab === "chat" ? "active" : ""}`}
+            onClick={() => setSideTab("chat")}
+          >
+            Chat
+          </button>
+          <button
+            type="button"
+            className="side-rail-close"
+            onClick={() => setSideOpen(false)}
+            aria-label="Close panel"
+          >
+            ✕
+          </button>
+        </div>
 
-      <button
-        type="button"
-        className={`history-toggle ${historyOpen ? "open" : "closed"}`}
-        onClick={() => setHistoryOpen((v) => !v)}
-        aria-label={historyOpen ? "Hide history" : "Show history"}
-        title={historyOpen ? "Hide history" : "Show history"}
-      >
-        <span className="history-toggle-arrow">{historyOpen ? "‹" : "›"}</span>
-        <span className="history-toggle-label">History</span>
-      </button>
+        <div className="side-rail-body" role="tabpanel">
+          {sideTab === "history" ? (
+            <>
+              <LedgerPanel
+                roomId={view.roomId}
+                players={view.players}
+                seats={view.seats}
+                buyIns={view.buyIns}
+              />
+              <HandHistoryPanel
+                hands={view.handHistory}
+                myPlayerId={playerId}
+                onOpenReplay={(handId) => send({ type: "hand.replay", handId })}
+              />
+            </>
+          ) : (
+            <ChatPanel
+              messages={view.chat}
+              onSend={(text) => send({ type: "chat.send", text })}
+            />
+          )}
+        </div>
+      </aside>
 
       <HoleCardsHero cards={view.myHoleCards?.cards ?? null} />
       {(() => {
@@ -415,27 +461,28 @@ type BuyInModalProps = {
 };
 
 function BuyInModal(props: BuyInModalProps) {
-  const [value, setValue] = useState(String(props.minBuyIn));
-  const num = Number(value);
+  const [value, setValue] = useState((props.minBuyIn / 100).toFixed(2));
+  const parsed = parseMoney(value);
+  const num = parsed ?? Number.NaN;
   const valid =
-    Number.isFinite(num) && num >= props.minBuyIn && num <= props.maxBuyIn;
+    parsed !== null && num >= props.minBuyIn && num <= props.maxBuyIn;
 
   const onSubmit = () => {
     if (valid) {
       props.onConfirm(num);
       return;
     }
-    if (!Number.isFinite(num)) {
+    if (parsed === null) {
       props.onValidationError("bad_buyin", "Enter a valid buy-in amount.");
     } else if (num < props.minBuyIn) {
       props.onValidationError(
         "bad_buyin",
-        `Minimum buy-in is $${props.minBuyIn}.`,
+        `Minimum buy-in is ${formatMoney(props.minBuyIn)}.`,
       );
     } else if (num > props.maxBuyIn) {
       props.onValidationError(
         "bad_buyin",
-        `Maximum buy-in is $${props.maxBuyIn}.`,
+        `Maximum buy-in is ${formatMoney(props.maxBuyIn)}.`,
       );
     }
   };
@@ -445,11 +492,10 @@ function BuyInModal(props: BuyInModalProps) {
       <div className="buyin-modal">
         <h3>{props.title}</h3>
         <label>
-          Buy-in (between {props.minBuyIn} and {props.maxBuyIn})
+          Buy-in (between {formatMoney(props.minBuyIn)} and {formatMoney(props.maxBuyIn)})
           <input
-            type="number"
-            min={props.minBuyIn}
-            max={props.maxBuyIn}
+            type="text"
+            inputMode="decimal"
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => {

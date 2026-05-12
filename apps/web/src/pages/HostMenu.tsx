@@ -1,5 +1,6 @@
 import type { Player, PlayerId, RoomConfig, Seat } from "@felt/shared";
 import { useState } from "react";
+import { MoneyInput } from "./MoneyInput";
 
 type Props = {
   hostId: PlayerId;
@@ -14,6 +15,8 @@ type Props = {
   onKick: (playerId: PlayerId) => void;
   onUpdateSettings: (settings: Partial<RoomConfig>) => void;
   onTransferHost: (playerId: PlayerId) => void;
+  onAddBot: () => void;
+  onRemoveBot: (playerId: PlayerId) => void;
 };
 
 type SettingsDraft = {
@@ -64,16 +67,20 @@ export function HostMenu({
   onKick,
   onUpdateSettings,
   onTransferHost,
+  onAddBot,
+  onRemoveBot,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [draft, setDraft] = useState<SettingsDraft | null>(null);
 
-  const kickables = players.filter((p) => p.id !== hostId);
-  const seatedIds = new Set(
-    seats.filter((s): s is Extract<Seat, { kind: "taken" }> => s.kind === "taken").map((s) => s.playerId),
-  );
+  const takenSeats = seats.filter((s): s is Extract<Seat, { kind: "taken" }> => s.kind === "taken");
+  const seatedIds = new Set(takenSeats.map((s) => s.playerId));
+  const botIds = new Set(takenSeats.filter((s) => s.isBot === true).map((s) => s.playerId));
+  const kickables = players.filter((p) => p.id !== hostId && !botIds.has(p.id));
+  const bots = takenSeats.filter((s) => s.isBot === true);
+  const hasFreeSeat = seats.some((s) => s.kind === "empty");
 
   if (ended) {
     return (
@@ -128,42 +135,32 @@ export function HostMenu({
           {settingsOpen && draft && config && (
             <div className="host-settings">
               <div className="host-settings-grid">
-                <label>SB</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={draft.smallBlind}
-                  onChange={(e) => setField("smallBlind", Number(e.target.value) || 1)}
-                />
-                <label>BB</label>
-                <input
-                  type="number"
-                  min={2}
-                  value={draft.bigBlind}
-                  onChange={(e) => setField("bigBlind", Number(e.target.value) || 2)}
-                />
-                <label>Min buy-in</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={draft.minBuyIn}
-                  onChange={(e) => setField("minBuyIn", Number(e.target.value) || 1)}
-                />
-                <label>Max buy-in</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={draft.maxBuyIn}
-                  onChange={(e) => setField("maxBuyIn", Number(e.target.value) || 1)}
-                />
-                <label>Timer (s)</label>
-                <input
-                  type="number"
-                  min={5}
-                  max={600}
-                  value={draft.turnTimerSec}
-                  onChange={(e) => setField("turnTimerSec", Number(e.target.value) || 5)}
-                />
+                <div className="host-settings-field">
+                  <label className="host-settings-field-label">SB ($)</label>
+                  <MoneyInput value={draft.smallBlind} onChange={(c) => setField("smallBlind", c)} />
+                </div>
+                <div className="host-settings-field">
+                  <label className="host-settings-field-label">BB ($)</label>
+                  <MoneyInput value={draft.bigBlind} onChange={(c) => setField("bigBlind", c)} />
+                </div>
+                <div className="host-settings-field">
+                  <label className="host-settings-field-label">Min buy-in ($)</label>
+                  <MoneyInput value={draft.minBuyIn} onChange={(c) => setField("minBuyIn", c)} />
+                </div>
+                <div className="host-settings-field">
+                  <label className="host-settings-field-label">Max buy-in ($)</label>
+                  <MoneyInput value={draft.maxBuyIn} onChange={(c) => setField("maxBuyIn", c)} />
+                </div>
+                <div className="host-settings-field host-settings-field-wide">
+                  <label className="host-settings-field-label">Timer (s)</label>
+                  <input
+                    type="number"
+                    min={5}
+                    max={600}
+                    value={draft.turnTimerSec}
+                    onChange={(e) => setField("turnTimerSec", Number(e.target.value) || 5)}
+                  />
+                </div>
               </div>
               <label className="host-settings-check">
                 <input
@@ -198,6 +195,33 @@ export function HostMenu({
               </div>
             </div>
           )}
+
+          <div className="host-bot-section">
+            <div className="host-kick-label">Bots</div>
+            <button
+              type="button"
+              className="host-action"
+              onClick={onAddBot}
+              disabled={!hasFreeSeat || paused}
+              title={hasFreeSeat ? "Seat a new AI bot" : "No empty seats"}
+            >
+              Add bot
+            </button>
+            {bots.map((b) => {
+              const name = players.find((p) => p.id === b.playerId)?.displayName ?? "Bot";
+              return (
+                <button
+                  type="button"
+                  key={`bot-${b.playerId}`}
+                  className="host-kick-btn"
+                  onClick={() => onRemoveBot(b.playerId)}
+                  title="Remove this bot"
+                >
+                  Remove {name}
+                </button>
+              );
+            })}
+          </div>
 
           {kickables.length > 0 && (
             <div className="host-kick-section">

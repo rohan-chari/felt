@@ -44,7 +44,14 @@ export type RoomEvent =
   | { kind: "playerJoined"; player: Player }
   | { kind: "playerLeft"; playerId: PlayerId }
   | { kind: "hostChanged"; hostId: PlayerId | null }
-  | { kind: "seatTaken"; seatIndex: number; playerId: PlayerId; stack: number }
+  | {
+      kind: "seatTaken";
+      seatIndex: number;
+      playerId: PlayerId;
+      stack: number;
+      isBot?: boolean;
+      botPersona?: import("@felt/shared").BotPersona;
+    }
   | { kind: "seatLeft"; seatIndex: number }
   | { kind: "seatStackUpdated"; seatIndex: number; stack: number; busted: boolean }
   | { kind: "gameStarted" }
@@ -131,6 +138,8 @@ export function applyEvent(state: RoomState, event: RoomEvent): RoomState {
         playerId: event.playerId,
         stack: event.stack,
         busted: false,
+        ...(event.isBot ? { isBot: true } : {}),
+        ...(event.botPersona ? { botPersona: event.botPersona } : {}),
       };
       return next;
     case "seatLeft":

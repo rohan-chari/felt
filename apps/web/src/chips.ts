@@ -6,14 +6,15 @@ export type ChipDenom = {
   label: string;
 };
 
-/** Standard poker denominations, descending. */
+/** Standard poker denominations, descending. Values are integer cents. */
 export const CHIP_DENOMS: readonly ChipDenom[] = [
-  { value: 1000, className: "chip-c-1000", label: "1K" },
-  { value: 500, className: "chip-c-500", label: "500" },
-  { value: 100, className: "chip-c-100", label: "100" },
-  { value: 25, className: "chip-c-25", label: "25" },
-  { value: 5, className: "chip-c-5", label: "5" },
-  { value: 1, className: "chip-c-1", label: "1" },
+  { value: 10000, className: "chip-c-1000", label: "$100" },
+  { value: 1000, className: "chip-c-1000", label: "$10" },
+  { value: 500, className: "chip-c-500", label: "$5" },
+  { value: 100, className: "chip-c-100", label: "$1" },
+  { value: 25, className: "chip-c-25", label: "25¢" },
+  { value: 5, className: "chip-c-5", label: "5¢" },
+  { value: 1, className: "chip-c-1", label: "1¢" },
 ] as const;
 
 const TARGET_MIN_TOP_COUNT = 4;

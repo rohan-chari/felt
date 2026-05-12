@@ -1,4 +1,4 @@
-import type { HandView, Player, PlayerId } from "@felt/shared";
+import { formatMoney, type HandView, type Player, type PlayerId } from "@felt/shared";
 
 type Props = {
   hand: HandView;
@@ -30,9 +30,9 @@ export function ShowdownBanner({ hand, players, myPlayerId, onShowCards }: Props
       <ul>
         {hand.result.awards.map((award, i) => (
           <li key={i}>
-            <strong>${award.amount}</strong> →{" "}
+            <strong>{formatMoney(award.amount)}</strong> →{" "}
             {award.winners
-              .map((w) => `${nameFor(w.playerId, players)} ($${w.amount}, ${w.handDescr})`)
+              .map((w) => `${nameFor(w.playerId, players)} (${formatMoney(w.amount)}, ${w.handDescr})`)
               .join(", ")}
           </li>
         ))}

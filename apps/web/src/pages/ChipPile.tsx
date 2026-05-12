@@ -1,3 +1,4 @@
+import { formatMoney } from "@felt/shared";
 import { chipBreakdown, denomFor } from "../chips";
 
 type Props = {
@@ -33,7 +34,7 @@ export function ChipPile({
   if (parts.length === 0) {
     return (
       <div className={`chip-pile ${SIZE_TOKENS[size]} chip-pile-empty`} title={title}>
-        {showTotal && <div className="chip-pile-total">$0</div>}
+        {showTotal && <div className="chip-pile-total">{formatMoney(0)}</div>}
       </div>
     );
   }
@@ -53,14 +54,14 @@ export function ChipPile({
               </div>
               {showLabels && (
                 <div className="chip-stack-label">
-                  {p.count}×<span className="chip-stack-label-value">${p.value}</span>
+                  {p.count}×<span className="chip-stack-label-value">{denom?.label ?? formatMoney(p.value)}</span>
                 </div>
               )}
             </div>
           );
         })}
       </div>
-      {showTotal && <div className="chip-pile-total">${amount}</div>}
+      {showTotal && <div className="chip-pile-total">{formatMoney(amount)}</div>}
     </div>
   );
 }

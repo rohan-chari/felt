@@ -143,6 +143,8 @@ export function applyServerMessage(state: RoomViewState, msg: ServerMessage): Ro
             playerId: delta.playerId,
             stack: delta.stack,
             busted: false,
+            ...(delta.isBot ? { isBot: true } : {}),
+            ...(delta.botPersona ? { botPersona: delta.botPersona } : {}),
           };
           return { ...state, seats: next };
         }

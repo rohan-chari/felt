@@ -1,4 +1,4 @@
-import type { Action, HandView, Player, PlayerId, PreAction } from "@felt/shared";
+import { type Action, formatMoney, type HandView, parseMoney, type Player, type PlayerId, type PreAction } from "@felt/shared";
 import { useEffect, useState } from "react";
 
 type Props = {
@@ -121,10 +121,11 @@ export function ActionPanel({
   const minBet = Math.min(2, mySeat.stack); // bb default; all-in below bb is allowed
   const maxBet = mySeat.stack;
 
-  const numericValue = raiseTo === "" ? Number.NaN : Number(raiseTo);
-  const inRangeBet = Number.isFinite(numericValue) && numericValue >= minBet && numericValue <= maxBet;
+  const parsedCents = raiseTo === "" ? null : parseMoney(raiseTo);
+  const numericValue = parsedCents ?? Number.NaN;
+  const inRangeBet = parsedCents !== null && numericValue >= minBet && numericValue <= maxBet;
   const inRangeRaise =
-    Number.isFinite(numericValue) && numericValue >= minRaiseTo && numericValue <= maxRaiseTo;
+    parsedCents !== null && numericValue >= minRaiseTo && numericValue <= maxRaiseTo;
   const outOfRange =
     raiseTo !== "" && ((canBet && !inRangeBet) || (!canBet && canRaise && !inRangeRaise));
 
@@ -140,8 +141,8 @@ export function ActionPanel({
   };
 
   const hint = canBet
-    ? `Bet ${minBet}–${maxBet}`
-    : `Raise to ${minRaiseTo}–${maxRaiseTo}`;
+    ? `Bet ${formatMoney(minBet)}–${formatMoney(maxBet)}`
+    : `Raise to ${formatMoney(minRaiseTo)}–${formatMoney(maxRaiseTo)}`;
 
   return (
     <div className="action-panel active">
@@ -161,7 +162,7 @@ export function ActionPanel({
         )}
         {canCall && (
           <button type="button" className="btn-call" onClick={() => onAction({ kind: "call" })}>
-            Call ${Math.min(need, mySeat.stack)}
+            Call {formatMoney(Math.min(need, mySeat.stack))}
           </button>
         )}
       </div>
@@ -169,14 +170,12 @@ export function ActionPanel({
         <>
           <div className="action-raise">
             <input
-              type="number"
+              type="text"
+              inputMode="decimal"
               className={outOfRange ? "invalid" : ""}
               placeholder={hint}
               value={raiseTo}
               onChange={(e) => setRaiseTo(e.target.value)}
-              min={canBet ? minBet : minRaiseTo}
-              max={canBet ? maxBet : maxRaiseTo}
-              step={1}
             />
             {canBet && (
               <button type="button" className="btn-bet" onClick={onSubmitBet} disabled={!inRangeBet}>
@@ -191,7 +190,7 @@ export function ActionPanel({
           </div>
           <div className="action-hint">
             {outOfRange ? (
-              <span className="hint-error">{hint} (you have ${mySeat.stack})</span>
+              <span className="hint-error">{hint} (you have {formatMoney(mySeat.stack)})</span>
             ) : (
               <span>{hint}</span>
             )}

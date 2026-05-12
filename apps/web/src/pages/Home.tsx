@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { createRoom } from "../api";
 import { resetPlayerId } from "../identity";
+import { MoneyInput } from "./MoneyInput";
 import "./Room.css";
 
 type FormState = {
@@ -75,6 +76,13 @@ export function Home() {
       <div className="home-card">
         <h1 className="home-logo">Felt</h1>
         <p className="home-tagline">A poker table for your group chat.</p>
+
+        <ol className="home-steps">
+          <li><span className="home-step-num">1</span> Create a room</li>
+          <li><span className="home-step-num">2</span> Share the link</li>
+          <li><span className="home-step-num">3</span> Sit down &amp; play</li>
+        </ol>
+
         <button type="button" className="home-cta" onClick={onCreate} disabled={busy}>
           {busy ? "Creating…" : "Create Room"}
         </button>
@@ -86,45 +94,37 @@ export function Home() {
           onClick={() => setShowSettings((s) => !s)}
           aria-expanded={showSettings}
         >
-          {showSettings ? "Hide settings ▲" : "Customize settings ▼"}
+          {showSettings ? "Hide settings ▲" : "⚙ Customize settings"}
         </button>
 
         {showSettings && (
           <div className="home-settings">
             <div className="settings-row">
-              <label className="settings-label" htmlFor="sb">Small blind</label>
-              <input
+              <label className="settings-label" htmlFor="sb">Small blind ($)</label>
+              <MoneyInput
                 id="sb"
-                type="number"
-                min={1}
                 value={form.smallBlind}
-                onChange={(e) => setField("smallBlind", Number(e.target.value) || 1)}
+                onChange={(c) => setField("smallBlind", c)}
               />
-              <label className="settings-label" htmlFor="bb">Big blind</label>
-              <input
+              <label className="settings-label" htmlFor="bb">Big blind ($)</label>
+              <MoneyInput
                 id="bb"
-                type="number"
-                min={2}
                 value={form.bigBlind}
-                onChange={(e) => setField("bigBlind", Number(e.target.value) || 2)}
+                onChange={(c) => setField("bigBlind", c)}
               />
             </div>
             <div className="settings-row">
-              <label className="settings-label" htmlFor="min">Min buy-in</label>
-              <input
+              <label className="settings-label" htmlFor="min">Min buy-in ($)</label>
+              <MoneyInput
                 id="min"
-                type="number"
-                min={1}
                 value={form.minBuyIn}
-                onChange={(e) => setField("minBuyIn", Number(e.target.value) || 1)}
+                onChange={(c) => setField("minBuyIn", c)}
               />
-              <label className="settings-label" htmlFor="max">Max buy-in</label>
-              <input
+              <label className="settings-label" htmlFor="max">Max buy-in ($)</label>
+              <MoneyInput
                 id="max"
-                type="number"
-                min={1}
                 value={form.maxBuyIn}
-                onChange={(e) => setField("maxBuyIn", Number(e.target.value) || 1)}
+                onChange={(c) => setField("maxBuyIn", c)}
               />
             </div>
             <div className="settings-row">
@@ -166,9 +166,15 @@ export function Home() {
           </div>
         )}
 
-        <button type="button" className="home-switch" onClick={onSwitchIdentity}>
-          {resetTick > 0 ? "Identity cleared — you'll join as a new player" : "Not you? Switch identity"}
-        </button>
+        <p className="home-footnote">
+          {resetTick > 0 ? (
+            <span className="home-footnote-confirm">Identity cleared — joining as a new player</span>
+          ) : (
+            <button type="button" className="home-switch" onClick={onSwitchIdentity}>
+              Not you? Switch identity
+            </button>
+          )}
+        </p>
       </div>
     </div>
   );

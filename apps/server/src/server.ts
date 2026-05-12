@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ClientMessage, HandRecord, PlayerId, RoomConfig } from "@felt/shared";
 import uWS, { type HttpResponse, type us_listen_socket, type WebSocket } from "uWebSockets.js";
+import { createOpenAiDecider } from "./bots/index.js";
 import { MemoryPersistence } from "./persistence/memory.js";
 import type { Persistence } from "./persistence/types.js";
 import { type Effect, RoomManager, type SessionId } from "./rooms/manager.js";
@@ -112,6 +113,12 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
 
   // Manager uses this for async-fired effects (e.g., the auto-advance timer).
   manager.setDispatcher(dispatch);
+
+  // Wire the real OpenAI-backed bot decider if OPENAI_API_KEY is set. Without
+  // a key, bots fall back to check/fold — host.addBot still works, the bots
+  // just play badly.
+  const decider = createOpenAiDecider();
+  if (decider) manager.setBotDecider(decider);
 
   // Persist completed hands to history. Errors are logged and swallowed —
   // a transient DB blip should not crash the game flow.
@@ -330,6 +337,20 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
             return;
           }
           handleResult(manager.handleHostTransfer(sessionId, { playerId: parsed.playerId }));
+          return;
+        }
+        case "host.addBot": {
+          const args: { seatIndex?: number } = {};
+          if (typeof parsed.seatIndex === "number") args.seatIndex = parsed.seatIndex;
+          handleResult(manager.handleHostAddBot(sessionId, args));
+          return;
+        }
+        case "host.removeBot": {
+          if (typeof parsed.playerId !== "string") {
+            sendError(sessionId, "bad_message", "host.removeBot missing playerId");
+            return;
+          }
+          handleResult(manager.handleHostRemoveBot(sessionId, { playerId: parsed.playerId }));
           return;
         }
         case "hand.history": {

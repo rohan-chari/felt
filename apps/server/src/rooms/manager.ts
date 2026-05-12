@@ -8,6 +8,7 @@ import {
 } from "@felt/engine";
 import type {
   Action,
+  BotPersona,
   HandLogEntryView,
   HandRecord,
   PlayerId,
@@ -17,6 +18,8 @@ import type {
   RoomId,
   ServerMessage,
 } from "@felt/shared";
+import { decideBotAction, randomBotName, randomPersona } from "../bots/index.js";
+import type { BotDecider } from "../bots/types.js";
 import type { RoomSnapshotBlob } from "../persistence/types.js";
 import { buildHandFromRoom, sha256Hex, toHandView } from "./hand.js";
 import {
@@ -107,6 +110,20 @@ export class RoomManager {
   private currentHandReveals = new Map<RoomId, Set<PlayerId>>();
   private dispatcher: ((effects: Effect[]) => void) | null = null;
   private handSink: ((record: HandRecord) => void) | null = null;
+
+  // ---------- Bot configuration ----------
+  /** Injected decider — set by the server with the OpenAI-backed implementation, by tests with a mock. */
+  private botDecider: BotDecider | null = null;
+  /** Milliseconds to pause before applying a bot's action so play doesn't feel robotically instant. */
+  botThinkingFloorMs = 800;
+  /** Daily cap on bot decider calls. Decremented per call; when 0, bots fall back to check/fold. */
+  botDailyCallLimit = 5000;
+  /** Pending bot-turn timers so we can cancel them if state changes before they fire. */
+  private botTurnTimers = new Map<RoomId, ReturnType<typeof setTimeout>>();
+
+  setBotDecider(fn: BotDecider | null): void {
+    this.botDecider = fn;
+  }
 
   /** Server registers a callback the manager uses to dispatch async effects (e.g., timer-fired hand starts). */
   setDispatcher(fn: (effects: Effect[]) => void): void {
@@ -417,12 +434,72 @@ export class RoomManager {
           this.dropPreAction(roomId, nextPlayerId);
           if (translated) {
             effects.push(...this.applyAndPropagate(roomId, nextPlayerId, translated));
+            return effects;
           }
         }
       }
     }
 
+    // If the next actor is a bot, kick off its turn asynchronously.
+    this.maybeArmBotTurn(roomId);
+
     return effects;
+  }
+
+  // ---------- Bot turn arming ----------
+
+  private clearBotTurn(roomId: RoomId): void {
+    const t = this.botTurnTimers.get(roomId);
+    if (t) clearTimeout(t);
+    this.botTurnTimers.delete(roomId);
+  }
+
+  /**
+   * If the current actor in the active hand is a bot, schedule its decision.
+   * Idempotent — calling twice in a row just resets the same timer.
+   */
+  private maybeArmBotTurn(roomId: RoomId): void {
+    this.clearBotTurn(roomId);
+    const hand = this.hands.get(roomId);
+    if (!hand || hand.street === "complete" || hand.currentSeatIdx === null) return;
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+    const currentSeatIdx = hand.currentSeatIdx;
+    const currentPlayerId = hand.seats[currentSeatIdx]?.playerId;
+    if (!currentPlayerId) return;
+    const seat = room.seats.find((s) => s.kind === "taken" && s.playerId === currentPlayerId);
+    if (!seat || seat.kind !== "taken" || !seat.isBot) return;
+
+    const playerId = seat.playerId;
+    const persona = seat.botPersona ?? "balanced";
+    const decideAndApply = async () => {
+      this.botTurnTimers.delete(roomId);
+      const currentHand = this.hands.get(roomId);
+      if (!currentHand || currentHand.street === "complete") return;
+      const seatIdx = currentHand.seats.findIndex((s) => s.playerId === playerId);
+      if (seatIdx === -1 || currentHand.currentSeatIdx !== seatIdx) return;
+
+      // Decide. Daily cap: when exhausted, skip the call and use fallback directly.
+      let useDecider: BotDecider | null = this.botDecider;
+      if (this.botDailyCallLimit <= 0) useDecider = null;
+      else if (useDecider) this.botDailyCallLimit -= 1;
+
+      const action = await decideBotAction(currentHand, seatIdx, persona, useDecider);
+
+      // State may have changed while awaiting; re-check before applying.
+      const stillCurrent = this.hands.get(roomId);
+      if (!stillCurrent || stillCurrent.street === "complete") return;
+      const stillSeatIdx = stillCurrent.seats.findIndex((s) => s.playerId === playerId);
+      if (stillSeatIdx === -1 || stillCurrent.currentSeatIdx !== stillSeatIdx) return;
+
+      const effects = this.applyAndPropagate(roomId, playerId, action);
+      this.dispatchAsync(effects);
+    };
+
+    const timer = setTimeout(() => {
+      void decideAndApply();
+    }, Math.max(0, this.botThinkingFloorMs));
+    this.botTurnTimers.set(roomId, timer);
   }
 
   private sendHoleCardsPrivately(roomId: RoomId, hand: HandState): Effect[] {
@@ -575,6 +652,7 @@ export class RoomManager {
     effects.push(...this.broadcastDelta(roomId, { kind: "nextHandScheduled", at: null }));
     effects.push(...this.broadcastHandSnapshot(roomId, hand));
     effects.push(...this.sendHoleCardsPrivately(roomId, hand));
+    this.maybeArmBotTurn(roomId);
     return effects;
   }
 
@@ -861,6 +939,7 @@ export class RoomManager {
 
     effects.push(...this.broadcastHandSnapshot(info.roomId, hand));
     effects.push(...this.sendHoleCardsPrivately(info.roomId, hand));
+    this.maybeArmBotTurn(info.roomId);
     return effects;
   }
 
@@ -1251,6 +1330,163 @@ export class RoomManager {
     return effects;
   }
 
+  // ---------- Bot host actions ----------
+
+  handleHostAddBot(
+    sessionId: SessionId,
+    args: { seatIndex?: number },
+  ): Effect[] | IntentError {
+    const auth = this.requireHost(sessionId);
+    if ("error" in auth) return auth;
+    const { room, roomId } = auth;
+    if (room.ended) return { error: { code: "session_ended", message: "Session has ended" } };
+
+    // Pick the seat: requested if empty, else first empty.
+    let seatIndex = args.seatIndex ?? -1;
+    if (seatIndex >= 0) {
+      const target = room.seats[seatIndex];
+      if (!target || target.kind !== "empty") {
+        return { error: { code: "seat_taken", message: "That seat is occupied" } };
+      }
+    } else {
+      seatIndex = room.seats.findIndex((s) => s.kind === "empty");
+      if (seatIndex === -1) {
+        return { error: { code: "no_seats", message: "No empty seats available" } };
+      }
+    }
+
+    const botId = `bot_${randomUUID()}`;
+    const persona = randomPersona();
+    const takenNames = new Set<string>();
+    for (const p of room.players.values()) takenNames.add(p.displayName.toLowerCase());
+    const displayName = randomBotName(takenNames);
+    const stack = room.config.startingStack;
+
+    // Register the bot as a player, seat them, record the buy-in for ledger parity.
+    let updated = applyEvent(room, {
+      kind: "playerJoined",
+      player: { id: botId, displayName },
+    });
+    // The bot is never auto-promoted to host. If the room had no host (shouldn't
+    // happen here since the caller is host) the playerJoined event sets hostId
+    // to the bot — guard against that by restoring the original host.
+    if (updated.hostId !== room.hostId) {
+      updated = applyEvent(updated, { kind: "hostChanged", hostId: room.hostId });
+    }
+    updated = applyEvent(updated, {
+      kind: "seatTaken",
+      seatIndex,
+      playerId: botId,
+      stack,
+      isBot: true,
+      botPersona: persona,
+    });
+    updated = applyEvent(updated, {
+      kind: "buyInIncreased",
+      playerId: botId,
+      amount: stack,
+    });
+    this.rooms.set(roomId, updated);
+
+    const effects: Effect[] = [];
+    effects.push(
+      ...this.broadcastDelta(roomId, {
+        kind: "playerJoined",
+        player: { id: botId, displayName },
+      }),
+    );
+    effects.push(
+      ...this.broadcastDelta(roomId, {
+        kind: "seatTaken",
+        seatIndex,
+        playerId: botId,
+        stack,
+        isBot: true,
+        botPersona: persona,
+      }),
+    );
+    effects.push(
+      ...this.broadcastDelta(roomId, {
+        kind: "buyInsUpdated",
+        playerId: botId,
+        total: stack,
+      }),
+    );
+    effects.push(...this.emitSystemChat(roomId, `${displayName} (bot) joined seat ${seatIndex + 1}.`));
+
+    // If the game is already running with no active hand and we now have ≥2 eligible
+    // seats, schedule the next hand so the bot gets dealt in.
+    const activeHand = this.hands.get(roomId);
+    const handInProgress = activeHand && activeHand.street !== "complete";
+    if (
+      updated.gameStarted &&
+      !handInProgress &&
+      !updated.nextHandAt &&
+      eligibleSeatedSlots(updated).length >= 2
+    ) {
+      effects.push(...this.scheduleNextHand(roomId));
+    }
+    return effects;
+  }
+
+  handleHostRemoveBot(
+    sessionId: SessionId,
+    args: { playerId: PlayerId },
+  ): Effect[] | IntentError {
+    const auth = this.requireHost(sessionId);
+    if ("error" in auth) return auth;
+    const { room, roomId } = auth;
+
+    // Verify the target is actually a bot.
+    const seatIdx = room.seats.findIndex(
+      (s) => s.kind === "taken" && s.playerId === args.playerId,
+    );
+    const seat = seatIdx === -1 ? undefined : room.seats[seatIdx];
+    if (!seat || seat.kind !== "taken" || !seat.isBot) {
+      return { error: { code: "not_a_bot", message: "That player is not a bot" } };
+    }
+
+    const effects: Effect[] = [];
+
+    // If mid-hand, force-fold the bot first.
+    const hand = this.hands.get(roomId);
+    if (hand && hand.street !== "complete") {
+      const handSeatIdx = hand.seats.findIndex((s) => s.playerId === args.playerId);
+      if (handSeatIdx !== -1 && !hand.seats[handSeatIdx]?.isFolded) {
+        const result = engineForceFold(hand, handSeatIdx);
+        if (result.ok) {
+          this.hands.set(roomId, result.state);
+          if (result.state.street === "complete") {
+            this.clearTurnTimer(roomId);
+            this.clearPreActions(roomId);
+          } else {
+            this.armTurnTimer(roomId, result.state);
+          }
+          effects.push(...this.broadcastHandSnapshot(roomId, result.state));
+          if (result.state.street === "complete") {
+            this.finalizeHandReveals(roomId, result.state);
+            this.emitHandRecord(roomId, result.state);
+            effects.push(...this.applyHandResultToRoom(roomId, result.state));
+            effects.push(...this.scheduleNextHand(roomId));
+          } else {
+            this.maybeArmBotTurn(roomId);
+          }
+        }
+      }
+    }
+
+    const botName = room.players.get(args.playerId)?.displayName ?? "Bot";
+    effects.push(...this.vacateSeat(roomId, args.playerId));
+    const r2 = this.rooms.get(roomId);
+    if (r2) {
+      const r3 = applyEvent(r2, { kind: "playerLeft", playerId: args.playerId });
+      this.rooms.set(roomId, r3);
+      effects.push(...this.broadcastDelta(roomId, { kind: "playerLeft", playerId: args.playerId }));
+    }
+    effects.push(...this.emitSystemChat(roomId, `${botName} (bot) was removed.`));
+    return effects;
+  }
+
   /**
    * Pick the next host after an old one is gone. Preference order: the player
    * at the lowest non-empty seat index, falling back to any other player in
@@ -1385,6 +1621,7 @@ export class RoomManager {
         this.hands.set(roomId, blob.hand);
         if (blob.hand.street !== "complete" && blob.hand.currentSeatIdx !== null) {
           this.armTurnTimer(roomId, blob.hand);
+          this.maybeArmBotTurn(roomId);
         }
       }
       if (blob.preActions.length > 0) {
@@ -1392,9 +1629,15 @@ export class RoomManager {
         for (const [pid, pre] of blob.preActions) map.set(pid, pre);
         this.preActions.set(roomId, map);
       }
-      // Schedule eviction for every player — they're effectively disconnected
-      // until they re-join. Reconnect cancels their timer.
+      // Schedule eviction for every human player — they're effectively
+      // disconnected until they re-join. Bots have no WS so they're never
+      // "disconnected"; skip them.
+      const botIds = new Set<PlayerId>();
+      for (const seat of blob.room.seats) {
+        if (seat.kind === "taken" && seat.isBot) botIds.add(seat.playerId);
+      }
       for (const playerId of blob.room.players.keys()) {
+        if (botIds.has(playerId)) continue;
         this.scheduleEviction(roomId, playerId);
       }
     }

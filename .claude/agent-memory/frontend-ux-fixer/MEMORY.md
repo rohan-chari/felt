@@ -1,0 +1,3 @@
+- [Home page visual hierarchy design](project_home_page_hierarchy.md) — CTA-first layout; steps pills; settings/identity demoted to quiet affordances
+- [Room page layout architecture](project_room_layout.md) — topbar with 3 groups; table max-width 860px; unified right side-rail for History+Chat
+- [identity.ts UUID fallback](project_identity_uuid.md) — DataView-based v4 UUID for non-HTTPS contexts; avoids TS2532 noUncheckedIndexedAccess

@@ -7,6 +7,14 @@ export type Player = {
   displayName: string;
 };
 
+/** Bot persona archetypes. Each maps to a prompt fragment that steers the model's play style. */
+export type BotPersona =
+  | "tight"
+  | "loose-aggressive"
+  | "calling-station"
+  | "maniac"
+  | "balanced";
+
 export type Seat =
   | { kind: "empty"; index: number }
   | {
@@ -16,6 +24,10 @@ export type Seat =
       stack: number;
       /** True after the player loses their stack to 0; they need to rebuy to play again. */
       busted: boolean;
+      /** True for AI-controlled seats. Absent on human seats. */
+      isBot?: boolean;
+      /** Persona steering the bot's prompt. Only set when isBot is true. */
+      botPersona?: BotPersona;
     };
 
 export type ChatMessage = {
@@ -28,13 +40,22 @@ export type ChatMessage = {
   system?: boolean;
 };
 
+/**
+ * All monetary fields below are integer cents (so `smallBlind: 10` means $0.10,
+ * `startingStack: 1000` means $10.00). The UI parses decimal input → cents and
+ * formats cents → decimal display via `formatMoney` / `parseMoney`.
+ */
 export type RoomConfig = {
   maxSeats: number;
+  /** Cents. */
   minBuyIn: number;
+  /** Cents. */
   maxBuyIn: number;
-  /** Default buy-in the UI pre-fills (host-tunable). Always within [minBuyIn, maxBuyIn]. */
+  /** Default buy-in (cents) the UI pre-fills. Always within [minBuyIn, maxBuyIn]. */
   startingStack: number;
+  /** Cents. */
   smallBlind: number;
+  /** Cents. */
   bigBlind: number;
   /** Per-turn auto-act timeout. */
   turnTimerMs: number;
@@ -50,6 +71,8 @@ export type RoomConfig = {
 
 export const DEFAULT_ROOM_CONFIG: RoomConfig = {
   maxSeats: 8,
+  // Values are integer cents. Defaults give a $0.01/$0.02 blinds, $1–$20
+  // buy-in micro-stakes game; hosts can tune via the settings UI.
   minBuyIn: 100,
   maxBuyIn: 2000,
   startingStack: 200,
