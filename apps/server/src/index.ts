@@ -1,7 +1,13 @@
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { config as loadDotenv } from "dotenv";
 import { MemoryPersistence } from "./persistence/memory.js";
 import { PostgresPersistence } from "./persistence/postgres.js";
 import type { Persistence } from "./persistence/types.js";
 import { createServer } from "./server.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+loadDotenv({ path: resolve(__dirname, "../../../.env") });
 
 const port = Number(process.env.PORT ?? 8080);
 const corsOrigin = process.env.CORS_ORIGIN ?? "*";

@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-felt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-felt}
+      POSTGRES_DB: ${POSTGRES_DB:-felt}
+    # Host port 5433 to avoid colliding with your local pgAdmin Postgres on 5432.
+    ports:
+      - "5433:5432"
+    volumes:
+      - felt_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-felt} -d ${POSTGRES_DB:-felt}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PORT: 8080
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+      # Inside the compose network, hostname "postgres" resolves to the db container.
+      DATABASE_URL: postgres://${POSTGRES_USER:-felt}:${POSTGRES_PASSWORD:-felt}@postgres:5432/${POSTGRES_DB:-felt}
+    ports:
+      - "8080:8080"
+
+volumes:
+  felt_pg_data:
